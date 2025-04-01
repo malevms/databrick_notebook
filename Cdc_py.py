@@ -1,9 +1,8 @@
-
 from pyspark.sql.functions import col, lit, current_date from delta.tables import DeltaTable
 
 Define table paths
 
-stage_table = "Tables/dbo.filetostage" target_table = "Tables/silver.target_table"
+stage_table = "Tables/dbo.filetostage" target_table = "Tables/silver.cdc_qual"
 
 Load staged data
 
@@ -34,5 +33,4 @@ Perform the merge
 
 delta_target.alias("tgt").merge( df_stage.alias("stg"), merge_condition ).whenMatchedUpdate( condition=update_condition, set={"termination_date": "current_date()"} ).whenNotMatchedInsert( values={col: "stg." + col for col in df_stage.columns} ).execute()
 
-print("Type 2 CDC load to silver.target_table completed.")
-
+print("Type 2 CDC load to silver.cdc_qual completed.")
