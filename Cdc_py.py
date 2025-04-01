@@ -13,9 +13,13 @@ Add SCD2 columns
 df_stage = df_stage.withColumn("effective_date", lit(current_date())) 
 .withColumn("termination_date", lit("9999-12-31"))
 
-Select only the first 30 relevant columns for CDC (plus tracking columns)
+Reorder columns: keys first, then audit columns, then the rest
 
-df_stage = df_stage.select( "Survey_Designator", "Client_ID", "Hosp_Service_Code", "Medical_Rec_No", "Claim_Id", "Race", "Carrier", "DOB", "Gender", "Last_Name", "First_Name", "Middle_Name", "Address1", "Address2", "City", "State", "Zip", "Discharge_Date", "Discharge_status_id", "Time_of_arrival", "Pt_type", "Nursing_station", "Sub_Group", "Minor_pt_type", "Attending_Physician", "Marital_Status", "Patient_Phone_Nbr", "Financial_Class", "Room", "Bed", "file_name", "effective_date", "termination_date" )
+selected_columns = [ "Client_ID", "Claim_Id",  # Keys "file_name", "effective_date", "termination_date",  # Audit columns "Survey_Designator", "Hosp_Service_Code", "Medical_Rec_No", "Race", "Carrier", "DOB", "Gender", "Last_Name", "First_Name", "Middle_Name", "Address1", "Address2", "City", "State", "Zip", "Discharge_Date", "Discharge_status_id", "Time_of_arrival", "Pt_type", "Nursing_station", "Sub_Group", "Minor_pt_type", "Attending_Physician", "Marital_Status", "Patient_Phone_Nbr", "Financial_Class", "Room", "Bed" ]
+
+Select and reorder
+
+df_stage = df_stage.select(*selected_columns)
 
 Create the target table if it doesn't exist
 
@@ -25,9 +29,15 @@ Load the target table as DeltaTable
 
 delta_target = DeltaTable.forPath(spark, target_table)
 
-Merge logic for Type 2 - key column is Client_ID
+Merge logic for Type 2 - key columns are Client_ID and Claim_Id
 
-merge_condition = "tgt.Client_ID = stg.Client_ID AND tgt.termination_date = '9999-12-31'" update_condition = " OR ".join([ "tgt.{0} != stg.{0}".format(col) for col in [ "Survey_Designator", "Hosp_Service_Code", "Medical_Rec_No", "Claim_Id", "Race", "Carrier", "DOB", "Gender", "Last_Name", "First_Name", "Middle_Name", "Address1", "Address2", "City", "State", "Zip", "Discharge_Date", "Discharge_status_id", "Time_of_arrival", "Pt_type", "Nursing_station", "Sub_Group", "Minor_pt_type", "Attending_Physician", "Marital_Status", "Patient_Phone_Nbr", "Financial_Class", "Room", "Bed" ] ])
+merge_condition = "tgt.Client_ID = stg.Client_ID AND tgt.Claim_Id = stg.Claim_Id AND tgt.termination_date = '9999-12-31'"
+
+Columns to compare for changes (excluding keys and audit columns)
+
+compare_columns = [ "Survey_Designator", "Hosp_Service_Code", "Medical_Rec_No", "Race", "Carrier", "DOB", "Gender", "Last_Name", "First_Name", "Middle_Name", "Address1", "Address2", "City", "State", "Zip", "Discharge_Date", "Discharge_status_id", "Time_of_arrival", "Pt_type", "Nursing_station", "Sub_Group", "Minor_pt_type", "Attending_Physician", "Marital_Status", "Patient_Phone_Nbr", "Financial_Class", "Room", "Bed" ]
+
+update_condition = " OR ".join([f"tgt.{col} != stg.{col}" for col in compare_columns])
 
 Perform the merge
 
