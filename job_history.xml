@@ -1,0 +1,321 @@
+<?xml version='1.0' encoding='utf-8' ?>
+
+<!-- build 20231.24.0103.1332                               -->
+<workbook original-version='18.1' source-build='2023.1.8 (20231.24.0103.1332)' source-platform='win' version='18.1' xmlns:user='http://www.tableausoftware.com/xml/user'>
+  <document-format-change-manifest>
+    <_.fcp.AnimationOnByDefault.true...AnimationOnByDefault />
+    <_.fcp.MarkAnimation.true...MarkAnimation />
+    <_.fcp.ObjectModelEncapsulateLegacy.true...ObjectModelEncapsulateLegacy />
+    <_.fcp.ObjectModelTableType.true...ObjectModelTableType />
+    <_.fcp.SchemaViewerObjectModel.true...SchemaViewerObjectModel />
+    <SheetIdentifierTracking />
+    <WindowsPersistSimpleIdentifiers />
+  </document-format-change-manifest>
+  <preferences>
+    <preference name='ui.encoding.shelf.height' value='24' />
+    <preference name='ui.shelf.height' value='26' />
+  </preferences>
+  <_.fcp.AnimationOnByDefault.false...style>
+    <_.fcp.AnimationOnByDefault.false..._.fcp.MarkAnimation.true...style-rule element='animation'>
+      <_.fcp.AnimationOnByDefault.false...format attr='animation-on' value='ao-on' />
+    </_.fcp.AnimationOnByDefault.false..._.fcp.MarkAnimation.true...style-rule>
+  </_.fcp.AnimationOnByDefault.false...style>
+  <datasources>
+    <datasource caption='History_RPT' inline='true' name='federated.09d7sbk0k1f6ol1fj27sk0i1sf45' version='18.1'>
+      <connection class='federated'>
+        <named-connections>
+          <named-connection caption='tdt.trinity-health.org' name='teradata.0kt95bd031uivv1f7vrez0pnj91x'>
+            <connection authentication='auth-ldap' class='teradata' disable-unicode='' encryptionMode='' enum-with-permissions='' odbc-connect-string-extras='' odbc-native-protocol='' one-time-sql='' query-band-spec='' schema='D_ALL_ADD' server='tdt.trinity-health.org' source-charset='' username='sggz5380'>
+              <connection-customization class='teradata' enabled='false' version='18.1'>
+                <vendor name='teradata' />
+                <driver name='teradata' />
+                <customizations>
+                  <customization name='CAP_CREATE_TEMP_TABLES' value='yes' />
+                  <customization name='CAP_SELECT_INTO' value='yes' />
+                  <customization name='CAP_SUPPRESS_QUICK_FILTER_ACCELERATION_VIEWS' value='no' />
+                </customizations>
+              </connection-customization>
+            </connection>
+          </named-connection>
+        </named-connections>
+        <_.fcp.ObjectModelEncapsulateLegacy.false...relation connection='teradata.0kt95bd031uivv1f7vrez0pnj91x' name='DWIDW_HISTORY_REPORT' table='[D_ALL_ADD].[DWIDW_HISTORY_REPORT]' type='table' />
+        <_.fcp.ObjectModelEncapsulateLegacy.true...relation connection='teradata.0kt95bd031uivv1f7vrez0pnj91x' name='DWIDW_HISTORY_REPORT' table='[D_ALL_ADD].[DWIDW_HISTORY_REPORT]' type='table' />
+        <metadata-records>
+          <metadata-record class='column'>
+            <remote-name>APPLICATION</remote-name>
+            <remote-type>130</remote-type>
+            <local-name>[APPLICATION]</local-name>
+            <parent-name>[DWIDW_HISTORY_REPORT]</parent-name>
+            <remote-alias>APPLICATION</remote-alias>
+            <ordinal>1</ordinal>
+            <local-type>string</local-type>
+            <aggregation>Count</aggregation>
+            <width>2000</width>
+            <contains-null>false</contains-null>
+            <padded-semantics>true</padded-semantics>
+            <collation flag='1' name='LEN_RUS_S2' />
+            <attributes>
+              <attribute datatype='string' name='DebugRemoteType'>&quot;SQL_WVARCHAR&quot;</attribute>
+              <attribute datatype='string' name='DebugWireType'>&quot;SQL_C_WCHAR&quot;</attribute>
+              <attribute datatype='string' name='TypeIsVarchar'>&quot;true&quot;</attribute>
+            </attributes>
+            <_.fcp.ObjectModelEncapsulateLegacy.true...object-id>[DWIDW_HISTORY_REPORT (D_ALL_ADD.DWIDW_HISTORY_REPORT)_67196B046431445F8C13282F2813D758]</_.fcp.ObjectModelEncapsulateLegacy.true...object-id>
+          </metadata-record>
+          <metadata-record class='column'>
+            <remote-name>SUB_APPLICATION_NAME</remote-name>
+            <remote-type>130</remote-type>
+            <local-name>[SUB_APPLICATION_NAME]</local-name>
+            <parent-name>[DWIDW_HISTORY_REPORT]</parent-name>
+            <remote-alias>SUB_APPLICATION_NAME</remote-alias>
+            <ordinal>2</ordinal>
+            <local-type>string</local-type>
+            <aggregation>Count</aggregation>
+            <width>2000</width>
+            <contains-null>false</contains-null>
+            <padded-semantics>true</padded-semantics>
+            <collation flag='1' name='LEN_RUS_S2' />
+            <attributes>
+              <attribute datatype='string' name='DebugRemoteType'>&quot;SQL_WVARCHAR&quot;</attribute>
+              <attribute datatype='string' name='DebugWireType'>&quot;SQL_C_WCHAR&quot;</attribute>
+              <attribute datatype='string' name='TypeIsVarchar'>&quot;true&quot;</attribute>
+            </attributes>
+            <_.fcp.ObjectModelEncapsulateLegacy.true...object-id>[DWIDW_HISTORY_REPORT (D_ALL_ADD.DWIDW_HISTORY_REPORT)_67196B046431445F8C13282F2813D758]</_.fcp.ObjectModelEncapsulateLegacy.true...object-id>
+          </metadata-record>
+          <metadata-record class='column'>
+            <remote-name>FOLDER</remote-name>
+            <remote-type>130</remote-type>
+            <local-name>[FOLDER]</local-name>
+            <parent-name>[DWIDW_HISTORY_REPORT]</parent-name>
+            <remote-alias>FOLDER</remote-alias>
+            <ordinal>3</ordinal>
+            <local-type>string</local-type>
+            <aggregation>Count</aggregation>
+            <width>2000</width>
+            <contains-null>false</contains-null>
+            <padded-semantics>true</padded-semantics>
+            <collation flag='1' name='LEN_RUS_S2' />
+            <attributes>
+              <attribute datatype='string' name='DebugRemoteType'>&quot;SQL_WVARCHAR&quot;</attribute>
+              <attribute datatype='string' name='DebugWireType'>&quot;SQL_C_WCHAR&quot;</attribute>
+              <attribute datatype='string' name='TypeIsVarchar'>&quot;true&quot;</attribute>
+            </attributes>
+            <_.fcp.ObjectModelEncapsulateLegacy.true...object-id>[DWIDW_HISTORY_REPORT (D_ALL_ADD.DWIDW_HISTORY_REPORT)_67196B046431445F8C13282F2813D758]</_.fcp.ObjectModelEncapsulateLegacy.true...object-id>
+          </metadata-record>
+          <metadata-record class='column'>
+            <remote-name>JOB_MEMBER_NAME</remote-name>
+            <remote-type>130</remote-type>
+            <local-name>[JOB_MEMBER_NAME]</local-name>
+            <parent-name>[DWIDW_HISTORY_REPORT]</parent-name>
+            <remote-alias>JOB_MEMBER_NAME</remote-alias>
+            <ordinal>4</ordinal>
+            <local-type>string</local-type>
+            <aggregation>Count</aggregation>
+            <width>2000</width>
+            <contains-null>false</contains-null>
+            <padded-semantics>true</padded-semantics>
+            <collation flag='1' name='LEN_RUS_S2' />
+            <attributes>
+              <attribute datatype='string' name='DebugRemoteType'>&quot;SQL_WVARCHAR&quot;</attribute>
+              <attribute datatype='string' name='DebugWireType'>&quot;SQL_C_WCHAR&quot;</attribute>
+              <attribute datatype='string' name='TypeIsVarchar'>&quot;true&quot;</attribute>
+            </attributes>
+            <_.fcp.ObjectModelEncapsulateLegacy.true...object-id>[DWIDW_HISTORY_REPORT (D_ALL_ADD.DWIDW_HISTORY_REPORT)_67196B046431445F8C13282F2813D758]</_.fcp.ObjectModelEncapsulateLegacy.true...object-id>
+          </metadata-record>
+          <metadata-record class='column'>
+            <remote-name>ORDER_DATE</remote-name>
+            <remote-type>7</remote-type>
+            <local-name>[ORDER_DATE]</local-name>
+            <parent-name>[DWIDW_HISTORY_REPORT]</parent-name>
+            <remote-alias>ORDER_DATE</remote-alias>
+            <ordinal>5</ordinal>
+            <local-type>datetime</local-type>
+            <aggregation>Year</aggregation>
+            <contains-null>true</contains-null>
+            <attributes>
+              <attribute datatype='string' name='DebugRemoteType'>&quot;SQL_TYPE_TIMESTAMP&quot;</attribute>
+              <attribute datatype='string' name='DebugWireType'>&quot;SQL_C_TYPE_TIMESTAMP&quot;</attribute>
+            </attributes>
+            <_.fcp.ObjectModelEncapsulateLegacy.true...object-id>[DWIDW_HISTORY_REPORT (D_ALL_ADD.DWIDW_HISTORY_REPORT)_67196B046431445F8C13282F2813D758]</_.fcp.ObjectModelEncapsulateLegacy.true...object-id>
+          </metadata-record>
+          <metadata-record class='column'>
+            <remote-name>START_TIME</remote-name>
+            <remote-type>7</remote-type>
+            <local-name>[START_TIME]</local-name>
+            <parent-name>[DWIDW_HISTORY_REPORT]</parent-name>
+            <remote-alias>START_TIME</remote-alias>
+            <ordinal>6</ordinal>
+            <local-type>datetime</local-type>
+            <aggregation>Year</aggregation>
+            <contains-null>false</contains-null>
+            <attributes>
+              <attribute datatype='string' name='DebugRemoteType'>&quot;SQL_TYPE_TIMESTAMP&quot;</attribute>
+              <attribute datatype='string' name='DebugWireType'>&quot;SQL_C_TYPE_TIMESTAMP&quot;</attribute>
+            </attributes>
+            <_.fcp.ObjectModelEncapsulateLegacy.true...object-id>[DWIDW_HISTORY_REPORT (D_ALL_ADD.DWIDW_HISTORY_REPORT)_67196B046431445F8C13282F2813D758]</_.fcp.ObjectModelEncapsulateLegacy.true...object-id>
+          </metadata-record>
+          <metadata-record class='column'>
+            <remote-name>END_TIME</remote-name>
+            <remote-type>7</remote-type>
+            <local-name>[END_TIME]</local-name>
+            <parent-name>[DWIDW_HISTORY_REPORT]</parent-name>
+            <remote-alias>END_TIME</remote-alias>
+            <ordinal>7</ordinal>
+            <local-type>datetime</local-type>
+            <aggregation>Year</aggregation>
+            <contains-null>true</contains-null>
+            <attributes>
+              <attribute datatype='string' name='DebugRemoteType'>&quot;SQL_TYPE_TIMESTAMP&quot;</attribute>
+              <attribute datatype='string' name='DebugWireType'>&quot;SQL_C_TYPE_TIMESTAMP&quot;</attribute>
+            </attributes>
+            <_.fcp.ObjectModelEncapsulateLegacy.true...object-id>[DWIDW_HISTORY_REPORT (D_ALL_ADD.DWIDW_HISTORY_REPORT)_67196B046431445F8C13282F2813D758]</_.fcp.ObjectModelEncapsulateLegacy.true...object-id>
+          </metadata-record>
+          <metadata-record class='column'>
+            <remote-name>RUNTIME</remote-name>
+            <remote-type>3</remote-type>
+            <local-name>[RUNTIME]</local-name>
+            <parent-name>[DWIDW_HISTORY_REPORT]</parent-name>
+            <remote-alias>RUNTIME</remote-alias>
+            <ordinal>8</ordinal>
+            <local-type>integer</local-type>
+            <aggregation>Sum</aggregation>
+            <precision>10</precision>
+            <contains-null>true</contains-null>
+            <attributes>
+              <attribute datatype='string' name='DebugRemoteType'>&quot;SQL_INTEGER&quot;</attribute>
+              <attribute datatype='string' name='DebugWireType'>&quot;SQL_C_SLONG&quot;</attribute>
+            </attributes>
+            <_.fcp.ObjectModelEncapsulateLegacy.true...object-id>[DWIDW_HISTORY_REPORT (D_ALL_ADD.DWIDW_HISTORY_REPORT)_67196B046431445F8C13282F2813D758]</_.fcp.ObjectModelEncapsulateLegacy.true...object-id>
+          </metadata-record>
+          <metadata-record class='column'>
+            <remote-name>RUN_AS_USER</remote-name>
+            <remote-type>130</remote-type>
+            <local-name>[RUN_AS_USER]</local-name>
+            <parent-name>[DWIDW_HISTORY_REPORT]</parent-name>
+            <remote-alias>RUN_AS_USER</remote-alias>
+            <ordinal>9</ordinal>
+            <local-type>string</local-type>
+            <aggregation>Count</aggregation>
+            <width>2000</width>
+            <contains-null>true</contains-null>
+            <padded-semantics>true</padded-semantics>
+            <collation flag='1' name='LEN_RUS_S2' />
+            <attributes>
+              <attribute datatype='string' name='DebugRemoteType'>&quot;SQL_WVARCHAR&quot;</attribute>
+              <attribute datatype='string' name='DebugWireType'>&quot;SQL_C_WCHAR&quot;</attribute>
+              <attribute datatype='string' name='TypeIsVarchar'>&quot;true&quot;</attribute>
+            </attributes>
+            <_.fcp.ObjectModelEncapsulateLegacy.true...object-id>[DWIDW_HISTORY_REPORT (D_ALL_ADD.DWIDW_HISTORY_REPORT)_67196B046431445F8C13282F2813D758]</_.fcp.ObjectModelEncapsulateLegacy.true...object-id>
+          </metadata-record>
+          <metadata-record class='column'>
+            <remote-name>COMPLETION_STATUS</remote-name>
+            <remote-type>130</remote-type>
+            <local-name>[COMPLETION_STATUS]</local-name>
+            <parent-name>[DWIDW_HISTORY_REPORT]</parent-name>
+            <remote-alias>COMPLETION_STATUS</remote-alias>
+            <ordinal>10</ordinal>
+            <local-type>string</local-type>
+            <aggregation>Count</aggregation>
+            <width>200</width>
+            <contains-null>true</contains-null>
+            <padded-semantics>true</padded-semantics>
+            <collation flag='1' name='LEN_RUS_S2' />
+            <attributes>
+              <attribute datatype='string' name='DebugRemoteType'>&quot;SQL_WVARCHAR&quot;</attribute>
+              <attribute datatype='string' name='DebugWireType'>&quot;SQL_C_WCHAR&quot;</attribute>
+              <attribute datatype='string' name='TypeIsVarchar'>&quot;true&quot;</attribute>
+            </attributes>
+            <_.fcp.ObjectModelEncapsulateLegacy.true...object-id>[DWIDW_HISTORY_REPORT (D_ALL_ADD.DWIDW_HISTORY_REPORT)_67196B046431445F8C13282F2813D758]</_.fcp.ObjectModelEncapsulateLegacy.true...object-id>
+          </metadata-record>
+        </metadata-records>
+      </connection>
+      <aliases enabled='yes' />
+      <column caption='Application' datatype='string' name='[APPLICATION]' role='dimension' type='nominal' />
+      <column caption='Completion Status' datatype='string' name='[COMPLETION_STATUS]' role='dimension' type='nominal' />
+      <column caption='End Time' datatype='datetime' name='[END_TIME]' role='dimension' type='ordinal' />
+      <column caption='Folder' datatype='string' name='[FOLDER]' role='dimension' type='nominal' />
+      <column caption='Job Member Name' datatype='string' name='[JOB_MEMBER_NAME]' role='dimension' type='nominal' />
+      <column caption='Order Date' datatype='datetime' name='[ORDER_DATE]' role='dimension' type='ordinal' />
+      <column caption='Runtime' datatype='integer' name='[RUNTIME]' role='measure' type='quantitative' />
+      <column caption='Run As User' datatype='string' name='[RUN_AS_USER]' role='dimension' type='nominal' />
+      <column caption='Start Time' datatype='datetime' name='[START_TIME]' role='dimension' type='ordinal' />
+      <column caption='Sub Application Name' datatype='string' name='[SUB_APPLICATION_NAME]' role='dimension' type='nominal' />
+      <_.fcp.ObjectModelTableType.true...column caption='DWIDW_HISTORY_REPORT' datatype='table' name='[__tableau_internal_object_id__].[DWIDW_HISTORY_REPORT (D_ALL_ADD.DWIDW_HISTORY_REPORT)_67196B046431445F8C13282F2813D758]' role='measure' type='quantitative' />
+      <layout _.fcp.SchemaViewerObjectModel.false...dim-percentage='0.5' _.fcp.SchemaViewerObjectModel.false...measure-percentage='0.4' dim-ordering='alphabetic' measure-ordering='alphabetic' show-structure='true' />
+      <semantic-values>
+        <semantic-value key='[Country].[Name]' value='&quot;United States&quot;' />
+      </semantic-values>
+      <_.fcp.ObjectModelEncapsulateLegacy.true...object-graph>
+        <objects>
+          <object caption='DWIDW_HISTORY_REPORT' id='DWIDW_HISTORY_REPORT (D_ALL_ADD.DWIDW_HISTORY_REPORT)_67196B046431445F8C13282F2813D758'>
+            <properties context=''>
+              <relation connection='teradata.0kt95bd031uivv1f7vrez0pnj91x' name='DWIDW_HISTORY_REPORT' table='[D_ALL_ADD].[DWIDW_HISTORY_REPORT]' type='table' />
+            </properties>
+          </object>
+        </objects>
+      </_.fcp.ObjectModelEncapsulateLegacy.true...object-graph>
+    </datasource>
+  </datasources>
+  <worksheets>
+    <worksheet name='Sheet 1'>
+      <table>
+        <view>
+          <datasources />
+          <aggregation value='true' />
+        </view>
+        <style />
+        <panes>
+          <pane selection-relaxation-option='selection-relaxation-allow'>
+            <view>
+              <breakdown value='auto' />
+            </view>
+            <mark class='Automatic' />
+          </pane>
+        </panes>
+        <rows />
+        <cols />
+      </table>
+      <simple-id uuid='{F8F3599C-07A4-4B27-B01C-0842B5209ECA}' />
+    </worksheet>
+  </worksheets>
+  <windows source-height='30'>
+    <window class='worksheet' maximized='true' name='Sheet 1'>
+      <cards>
+        <edge name='left'>
+          <strip size='160'>
+            <card type='pages' />
+            <card type='filters' />
+            <card type='marks' />
+          </strip>
+        </edge>
+        <edge name='top'>
+          <strip size='2147483647'>
+            <card type='columns' />
+          </strip>
+          <strip size='2147483647'>
+            <card type='rows' />
+          </strip>
+          <strip size='31'>
+            <card type='title' />
+          </strip>
+        </edge>
+      </cards>
+      <simple-id uuid='{520AC4EA-EF22-4771-8F47-EC0AEE690678}' />
+    </window>
+  </windows>
+  <thumbnails>
+    <thumbnail height='192' name='Sheet 1' width='192'>
+      iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAYAAABS3GwHAAAACXBIWXMAAA7DAAAOwwHHb6hk
+      AAACFUlEQVR4nO3TMQEAIAzAMMC/5yFjRxMFfXpnZg5Eve0A2GQA0gxAmgFIMwBpBiDNAKQZ
+      gDQDkGYA0gxAmgFIMwBpBiDNAKQZgDQDkGYA0gxAmgFIMwBpBiDNAKQZgDQDkGYA0gxAmgFI
+      MwBpBiDNAKQZgDQDkGYA0gxAmgFIMwBpBiDNAKQZgDQDkGYA0gxAmgFIMwBpBiDNAKQZgDQD
+      kGYA0gxAmgFIMwBpBiDNAKQZgDQDkGYA0gxAmgFIMwBpBiDNAKQZgDQDkGYA0gxAmgFIMwBp
+      BiDNAKQZgDQDkGYA0gxAmgFIMwBpBiDNAKQZgDQDkGYA0gxAmgFIMwBpBiDNAKQZgDQDkGYA
+      0gxAmgFIMwBpBiDNAKQZgDQDkGYA0gxAmgFIMwBpBiDNAKQZgDQDkGYA0gxAmgFIMwBpBiDN
+      AKQZgDQDkGYA0gxAmgFIMwBpBiDNAKQZgDQDkGYA0gxAmgFIMwBpBiDNAKQZgDQDkGYA0gxA
+      mgFIMwBpBiDNAKQZgDQDkGYA0gxAmgFIMwBpBiDNAKQZgDQDkGYA0gxAmgFIMwBpBiDNAKQZ
+      gDQDkGYA0gxAmgFIMwBpBiDNAKQZgDQDkGYA0gxAmgFIMwBpBiDNAKQZgDQDkGYA0gxAmgFI
+      MwBpBiDNAKQZgDQDkGYA0gxAmgFIMwBpBiDNAKQZgDQDkGYA0gxAmgFIMwBpBiDNAKR9Y+0F
+      fBUOM1sAAAAASUVORK5CYII=
+    </thumbnail>
+  </thumbnails>
+</workbook>
