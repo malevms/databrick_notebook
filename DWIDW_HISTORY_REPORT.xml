@@ -1,0 +1,307 @@
+<?xml version='1.0' encoding='utf-8' ?>
+<workbook original-version='18.1' source-build='2023.1.8 (20231.24.0103.1332)' source-platform='win' version='18.1' xmlns:user='http://www.tableausoftware.com/xml/user'>
+  <document-format-change-manifest>
+    <_.fcp.AnimationOnByDefault.true...AnimationOnByDefault />
+    <_.fcp.MarkAnimation.true...MarkAnimation />
+    <_.fcp.ObjectModelEncapsulateLegacy.true...ObjectModelEncapsulateLegacy />
+    <_.fcp.ObjectModelTableType.true...ObjectModelTableType />
+    <_.fcp.SchemaViewerObjectModel.true...SchemaViewerObjectModel />
+    <SheetIdentifierTracking />
+    <WindowsPersistSimpleIdentifiers />
+  </document-format-change-manifest>
+
+  <preferences>
+    <preference name='ui.encoding.shelf.height' value='24' />
+    <preference name='ui.shelf.height' value='26' />
+  </preferences>
+
+  <datasources>
+    <datasource caption='History_RPT' inline='true' name='federated.09d7sbk0k1f6ol1fj27sk0i1sf45' version='18.1'>
+      <connection class='federated'>
+        <named-connections>
+          <named-connection caption='tdt.trinity-health.org' name='teradata.0kt95bd031uivv1f7vrez0pnj91x'>
+            <connection authentication='auth-ldap' class='teradata' disable-unicode='' encryptionMode='' enum-with-permissions='' odbc-connect-string-extras='' odbc-native-protocol='' one-time-sql='' query-band-spec='' schema='D_ALL_ADD' server='tdt.trinity-health.org' source-charset='' username='sggz5380'>
+              <connection-customization class='teradata' enabled='false' version='18.1'>
+                <vendor name='teradata' />
+                <driver name='teradata' />
+                <customizations>
+                  <customization name='CAP_CREATE_TEMP_TABLES' value='yes' />
+                  <customization name='CAP_SELECT_INTO' value='yes' />
+                  <customization name='CAP_SUPPRESS_QUICK_FILTER_ACCELERATION_VIEWS' value='no' />
+                </customizations>
+              </connection-customization>
+            </connection>
+          </named-connection>
+        </named-connections>
+        <_.fcp.ObjectModelEncapsulateLegacy.false...relation connection='teradata.0kt95bd031uivv1f7vrez0pnj91x' name='DWIDW_HISTORY_REPORT' table='[D_ALL_ADD].[DWIDW_HISTORY_REPORT]' type='table' />
+        <_.fcp.ObjectModelEncapsulateLegacy.true...relation connection='teradata.0kt95bd031uivv1f7vrez0pnj91x' name='DWIDW_HISTORY_REPORT' table='[D_ALL_ADD].[DWIDW_HISTORY_REPORT]' type='table' />
+      </connection>
+
+      <!-- Base columns from your table -->
+      <column caption='Application' datatype='string' name='[APPLICATION]' role='dimension' type='nominal' />
+      <column caption='Sub Application Name' datatype='string' name='[SUB_APPLICATION_NAME]' role='dimension' type='nominal' />
+      <column caption='Folder' datatype='string' name='[FOLDER]' role='dimension' type='nominal' />
+      <column caption='Job Member Name' datatype='string' name='[JOB_MEMBER_NAME]' role='dimension' type='nominal' />
+      <column caption='Order Date' datatype='datetime' name='[ORDER_DATE]' role='dimension' type='ordinal' />
+      <column caption='Start Time' datatype='datetime' name='[START_TIME]' role='dimension' type='ordinal' />
+      <column caption='End Time' datatype='datetime' name='[END_TIME]' role='dimension' type='ordinal' />
+      <column caption='Runtime' datatype='integer' name='[RUNTIME]' role='measure' type='quantitative' />
+      <column caption='Run As User' datatype='string' name='[RUN_AS_USER]' role='dimension' type='nominal' />
+      <column caption='Completion Status' datatype='string' name='[COMPLETION_STATUS]' role='dimension' type='nominal' />
+
+      <!-- Calculated fields -->
+      <column name='[Delay Flag]' datatype='string' role='dimension' type='nominal'>
+        <calculation class='tableau' formula='IF [RUNTIME] &gt; 1800 THEN &quot;Yes&quot; ELSE &quot;No&quot; END' />
+      </column>
+
+      <column name='[Runtime in Minutes]' datatype='real' role='measure' type='quantitative'>
+        <calculation class='tableau' formula='ROUND([RUNTIME] / 60.0, 1)' />
+      </column>
+
+      <column name='[Status]' datatype='string' role='dimension' type='nominal'>
+        <calculation class='tableau' formula='IF [COMPLETION_STATUS] = &quot;ended not ok&quot; OR ISNULL([COMPLETION_STATUS]) THEN &quot;Failure&quot; ELSEIF [RUNTIME] &gt; 1800 THEN &quot;Delayed&quot; ELSE &quot;Success&quot; END' />
+      </column>
+
+      <column name='[Status Color]' datatype='string' role='dimension' type='nominal'>
+        <calculation class='tableau' formula='IF [Status] = &quot;Failure&quot; THEN &quot;Red&quot; ELSEIF [Status] = &quot;Delayed&quot; THEN &quot;Orange&quot; ELSE &quot;Green&quot; END' />
+      </column>
+
+      <column name='[Total Jobs]' datatype='integer' role='measure' type='quantitative'>
+        <calculation class='tableau' formula='COUNT([JOB_MEMBER_NAME])' />
+      </column>
+
+      <column name='[Total Delayed Jobs]' datatype='integer' role='measure' type='quantitative'>
+        <calculation class='tableau' formula='SUM(IF [Delay Flag] = &quot;Yes&quot; THEN 1 ELSE 0 END)' />
+      </column>
+
+      <column name='[% Delayed Jobs]' datatype='real' role='measure' type='quantitative'>
+        <calculation class='tableau' formula='SUM(IF [Delay Flag] = &quot;Yes&quot; THEN 1 ELSE 0 END) / COUNT([JOB_MEMBER_NAME])' />
+      </column>
+
+      <column name='[Avg Runtime (Min)]' datatype='real' role='measure' type='quantitative'>
+        <calculation class='tableau' formula='ROUND(AVG([Runtime in Minutes]), 1)' />
+      </column>
+
+    </datasource>
+  </datasources>
+  <worksheets>
+
+    <!-- === Dashboard Overview (KPIs) Sheet === -->
+    <worksheet name='Dashboard Overview'>
+      <table>
+        <view>
+          <datasources>
+            <datasource name='federated.09d7sbk0k1f6ol1fj27sk0i1sf45' />
+          </datasources>
+          <aggregation value='true' />
+        </view>
+        <style />
+        <panes>
+          <pane selection-relaxation-option='selection-relaxation-allow'>
+            <view>
+              <breakdown value='auto' />
+              <encoding axis='Rows'>
+                <field name='[Measure Names]' type='ordinal' />
+              </encoding>
+              <encoding axis='Columns'>
+                <field name='[Measure Values]' type='quantitative' />
+              </encoding>
+              <encoding axis='Color'>
+                <field name='[Status Color]' type='nominal' />
+              </encoding>
+            </view>
+            <mark class='Automatic' />
+          </pane>
+        </panes>
+        <rows>
+          <row field='[Measure Names]' />
+        </rows>
+        <cols>
+          <col field='[Measure Values]' />
+        </cols>
+        <measure-names-fields>
+          <measure-name-field name='[Total Jobs]' />
+          <measure-name-field name='[Total Delayed Jobs]' />
+          <measure-name-field name='[% Delayed Jobs]' />
+          <measure-name-field name='[Avg Runtime (Min)]' />
+        </measure-names-fields>
+        <measure-values-fields>
+          <measure-value-field aggregator='sum' name='[Total Jobs]' />
+          <measure-value-field aggregator='sum' name='[Total Delayed Jobs]' />
+          <measure-value-field aggregator='avg' name='[% Delayed Jobs]' />
+          <measure-value-field aggregator='avg' name='[Avg Runtime (Min)]' />
+        </measure-values-fields>
+      </table>
+      <simple-id uuid='{DASHBOARD-OVERVIEW-UUID-0001}' />
+    </worksheet>
+
+  </worksheets>
+  <worksheets>
+
+    <!-- Placeholder sheets for the remaining visuals -->
+    <worksheet name='Job Runtime Trend'>
+      <table>
+        <view>
+          <datasources>
+            <datasource name='federated.09d7sbk0k1f6ol1fj27sk0i1sf45' />
+          </datasources>
+          <aggregation value='true' />
+        </view>
+        <style />
+        <panes>
+          <pane selection-relaxation-option='selection-relaxation-allow'>
+            <view>
+              <breakdown value='auto' />
+            </view>
+            <mark class='Automatic' />
+          </pane>
+        </panes>
+      </table>
+      <simple-id uuid='{TREND-SHEET-UUID-0002}' />
+    </worksheet>
+
+    <worksheet name='Top Slowest Jobs'>
+      <table>
+        <view>
+          <datasources>
+            <datasource name='federated.09d7sbk0k1f6ol1fj27sk0i1sf45' />
+          </datasources>
+          <aggregation value='true' />
+        </view>
+        <style />
+        <panes>
+          <pane selection-relaxation-option='selection-relaxation-allow'>
+            <view>
+              <breakdown value='auto' />
+            </view>
+            <mark class='Automatic' />
+          </pane>
+        </panes>
+      </table>
+      <simple-id uuid='{TOPSLOWEST-SHEET-UUID-0003}' />
+    </worksheet>
+
+    <worksheet name='Runtime Distribution'>
+      <table>
+        <view>
+          <datasources>
+            <datasource name='federated.09d7sbk0k1f6ol1fj27sk0i1sf45' />
+          </datasources>
+          <aggregation value='true' />
+        </view>
+        <style />
+        <panes>
+          <pane selection-relaxation-option='selection-relaxation-allow'>
+            <view>
+              <breakdown value='auto' />
+            </view>
+            <mark class='Automatic' />
+          </pane>
+        </panes>
+      </table>
+      <simple-id uuid='{BOXPLOT-SHEET-UUID-0004}' />
+    </worksheet>
+
+    <worksheet name='Heatmap of Delays'>
+      <table>
+        <view>
+          <datasources>
+            <datasource name='federated.09d7sbk0k1f6ol1fj27sk0i1sf45' />
+          </datasources>
+          <aggregation value='true' />
+        </view>
+        <style />
+        <panes>
+          <pane selection-relaxation-option='selection-relaxation-allow'>
+            <view>
+              <breakdown value='auto' />
+            </view>
+            <mark class='Automatic' />
+          </pane>
+        </panes>
+      </table>
+      <simple-id uuid='{HEATMAP-SHEET-UUID-0005}' />
+    </worksheet>
+
+    <worksheet name='Job Run Details Table'>
+      <table>
+        <view>
+          <datasources>
+            <datasource name='federated.09d7sbk0k1f6ol1fj27sk0i1sf45' />
+          </datasources>
+          <aggregation value='true' />
+        </view>
+        <style />
+        <panes>
+          <pane selection-relaxation-option='selection-relaxation-allow'>
+            <view>
+              <breakdown value='auto' />
+            </view>
+            <mark class='Automatic' />
+          </pane>
+        </panes>
+      </table>
+      <simple-id uuid='{DETAILS-SHEET-UUID-0006}' />
+    </worksheet>
+
+    <worksheet name='SLA Summary & Alerts'>
+      <table>
+        <view>
+          <datasources>
+            <datasource name='federated.09d7sbk0k1f6ol1fj27sk0i1sf45' />
+          </datasources>
+          <aggregation value='true' />
+        </view>
+        <style />
+        <panes>
+          <pane selection-relaxation-option='selection-relaxation-allow'>
+            <view>
+              <breakdown value='auto' />
+            </view>
+            <mark class='Automatic' />
+          </pane>
+        </panes>
+      </table>
+      <simple-id uuid='{SLA-SHEET-UUID-0007}' />
+    </worksheet>
+
+  </worksheets>
+
+  <dashboards>
+    <dashboard name='ETL Monitoring Dashboard'>
+      <zones>
+        <zone type='worksheet' worksheet='Dashboard Overview' x='0' y='0' width='1000' height='200' />
+        <zone type='worksheet' worksheet='Job Runtime Trend' x='0' y='200' width='1000' height='300' />
+        <zone type='worksheet' worksheet='Top Slowest Jobs' x='0' y='500' width='1000' height='300' />
+      </zones>
+      <style />
+    </dashboard>
+  </dashboards>
+
+  <windows source-height='30'>
+    <window class='dashboard' maximized='true' name='ETL Monitoring Dashboard'>
+      <cards>
+        <edge name='left'>
+          <strip size='160'>
+            <card type='pages' />
+            <card type='filters' />
+            <card type='marks' />
+          </strip>
+        </edge>
+        <edge name='top'>
+          <strip size='2147483647'>
+            <card type='columns' />
+          </strip>
+          <strip size='2147483647'>
+            <card type='rows' />
+          </strip>
+          <strip size='31'>
+            <card type='title' />
+          </strip>
+        </edge>
+      </cards>
+      <simple-id uuid='{WINDOW-UUID-0001}' />
+    </window>
+  </windows>
+
+</workbook>
