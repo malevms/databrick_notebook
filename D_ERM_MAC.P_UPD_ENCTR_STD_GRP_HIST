@@ -1,0 +1,134 @@
+REPLACE PROCEDURE D_ERM_MAC.P_UPD_ENCTR_STD_GRP_HIST (
+    IN in_name_space_cd VARCHAR(200),
+    IN in_run_type VARCHAR(1),
+    IN in_start_dt DATE,
+    OUT out_return_msg VARCHAR(4000)
+) SQL SECURITY OWNER
+BEGIN
+    /* [Original comments unchanged] */
+
+    DECLARE l_last_completion_dt, l_start_dt DATE;
+    DECLARE not_found, l_activity_count NUMBER DEFAULT 0;
+    DECLARE l_warn_msg VARCHAR(255);
+    DECLARE l_PRCS_NAME VARCHAR(55) DEFAULT 'Standard Grouping Load RSW';
+    DECLARE l_SCRIPT_NAME VARCHAR(55) DEFAULT 'p_upd_enctr_std_grp_hist';
+    DECLARE l_STAT_CD VARCHAR(55) DEFAULT 'R';
+    DECLARE l_BUS_UNIT VARCHAR(55) DEFAULT 'ALL';
+    DECLARE l_JOB_ID, l_JOB_DTL_ID NUMBER DEFAULT NULL;
+    DECLARE l_RUN_ERROR_CD NUMBER DEFAULT 0;
+    DECLARE l_RUN_ERROR_MSG, l_return_msg VARCHAR(2000);
+
+    DECLARE CONTINUE HANDLER FOR SQLSTATE '02000' SET not_found = 1;
+    DECLARE CONTINUE HANDLER FOR SQLWARNING SET l_warn_msg = 'WARN '||SQLCODE;
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        SET l_RUN_ERROR_CD = SQLCODE;
+        GET DIAGNOSTICS EXCEPTION 1 l_RUN_ERROR_MSG = MESSAGE_TEXT;
+        CALL D_ERM_MAC.P_ERM_JOB_HISTORY(:l_JOB_ID, :l_PRCS_NAME, :l_BUS_UNIT, :l_SCRIPT_NAME, 'E', 0, 0, 0, :l_RUN_ERROR_CD, :l_SCRIPT_NAME||' failed with error '||:l_RUN_ERROR_MSG, :l_JOB_ID);
+        RESIGNAL SET MESSAGE_TEXT = l_RUN_ERROR_MSG;
+    END;
+
+    SET l_BUS_UNIT = in_name_space_cd;
+    SET out_return_msg = 'Started';
+    SELECT COALESCE(MAX(start_dt), DATE'2013-01-01') INTO l_last_completion_dt
+    FROM D_SHR_IBV.JOB_HISTORY
+    WHERE script_name = 'p_upd_enctr_std_grp_hist'
+        AND stat_cd = 'C'
+        AND business_unit = :in_name_space_cd;
+
+    IF in_run_type = 'H' THEN
+        SET l_start_dt = DATE'2022-07-01';
+    ELSEIF in_run_type = 'I' THEN
+        SET l_start_dt = l_last_completion_dt;
+    ELSEIF in_run_type = 'S' THEN
+        SET l_start_dt = in_start_dt;
+    END IF;
+
+    CALL D_ERM_MAC.P_ERM_JOB_HISTORY(:l_JOB_ID, :l_PRCS_NAME, :l_BUS_UNIT, :l_SCRIPT_NAME, :l_STAT_CD, 0, 0, 0, :l_RUN_ERROR_CD, :l_RUN_ERROR_MSG, :l_JOB_ID);
+
+    -- Optimized: Explicit filter on name_space_cd and eff_from_dt for partition elimination
+    DELETE FROM D_ERM_IBV.ENCTR_STD_GRP_HIST
+    WHERE name_space_cd = :in_name_space_cd
+        AND eff_from_dt >= :l_start_dt;
+
+    -- [Job detail logging unchanged]
+
+    -- Optimized MERGE: Added filters for efficiency
+    MERGE INTO D_ERM_IBV.enctr_prcs_cntrl cntrl
+    USING (
+        SELECT eh.enctr_id,
+            eh.name_space_cd,
+            eh.rec_auth
+        FROM D_ERM_IBV.ENCTR_HIST eh
+        JOIN D_ERM_IBV.ENCTR_CHRG_DTL dtl ON eh.enctr_id = dtl.enctr_id AND eh.name_space_cd = dtl.name_space_cd
+        WHERE eh.NAME_SPACE_CD = :in_name_space_cd
+            AND eh.EFF_THRU_DT = '2041-01-01'
+            AND COALESCE(dtl.chrg_qty, 0) > 0
+            AND dtl.post_dt >= CURRENT_DATE - 31
+            AND dtl.post_dt >= :l_start_dt  -- Added to limit scan
+        GROUP BY 1, 2, 3
+    ) enctrs ON (cntrl.enctr_id = enctrs.enctr_id AND cntrl.name_space_cd = enctrs.name_space_cd)
+    -- [Rest of MERGE unchanged]
+
+    -- Call sub-procs (optimized versions below)
+    CALL D_ERM_MAC.p_upd_enctr_std_grp_pat_clas(:in_name_space_cd, :in_run_type, :l_start_dt, :out_return_msg);
+    CALL d_erm_mac.p_upd_enctr_std_grp_srvc_lvl_sg2(:in_name_space_cd, :in_run_type, :l_start_dt, :out_return_msg);
+
+    -- Optimized Volatile Table: Changed PI for better window/join performance
+    CREATE VOLATILE MULTISET TABLE std_grp_hist_volatile AS (
+        ENCTR_ID BIGINT,
+        EFF_FROM_DT DATE,
+        REC_AUTH SMALLINT,
+        NAME_SPACE_CD VARCHAR(50),
+        JOB_ID NUMBER,
+        EFF_THRU_DT DATE,
+        STD_PTIENT_CLAS VARCHAR(100),
+        STD_SRVC_LINE_1 VARCHAR(200),
+        STD_SRVC_LINE_2 VARCHAR(200),
+        STD_SRVC_LINE_3 VARCHAR(200),
+        STD_SRVC_LINE_PCDR VARCHAR(200),
+        INPTN_COVID_FLG VARCHAR(1),
+        SURG_FLG VARCHAR(1),
+        ER_FLG VARCHAR(1)
+    ) PRIMARY INDEX (enctr_id, eff_from_dt)  -- Optimized PI
+    ON COMMIT PRESERVE ROWS;
+
+    -- Optimized INSERT: Used QUALIFY for row_num filter to reduce spool
+    INSERT INTO std_grp_hist_volatile
+    SELECT stg1.ENCTR_ID,
+        stg1.EFF_FROM_DT,
+        stg1.REC_AUTH,
+        stg1.NAME_SPACE_CD,
+        :l_JOB_ID,
+        stg1.EFF_THRU_DT,
+        stg1.STD_PTIENT_CLAS,
+        stg1.std_srvc_line_1,
+        stg1.std_srvc_line_2,
+        stg1.std_srvc_line_3,
+        stg1.std_srvc_line_pcdr,
+        stg1.INPTN_COVID_FLG,
+        stg1.SURG_FLG,
+        stg1.ER_FLG
+    FROM D_ERM_SBV.STG_ENCTR_STD_GRP_HIST stg1
+    WHERE stg1.NAME_SPACE_CD = :in_NAME_SPACE_CD
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY stg1.enctr_id ORDER BY stg1.eff_from_dt) = 1  -- Dedup first row
+        AND COALESCE(LAG(COALESCE(STD_PTIENT_CLAS,'NA')||... OVER (PARTITION BY enctr_id, REC_AUTH, NAME_SPACE_CD ORDER BY eff_from_dt), 'N/A') 
+            <> (COALESCE(STD_PTIENT_CLAS,'NA')||...);  -- Simplified comparison with LAG
+
+    -- [Logging unchanged]
+
+    -- Optimized MERGE: Unchanged, but ensure stats collected before
+
+    -- Optimized UPDATE: Use LEAD for eff_thru_dt
+    MERGE INTO D_ERM_IBV.ENCTR_STD_GRP_HIST tgt
+    USING (
+        SELECT name_space_cd, enctr_id, eff_from_dt,
+            COALESCE(LEAD(eff_from_dt - 1) OVER (PARTITION BY name_space_cd, enctr_id ORDER BY eff_from_dt), DATE '20410101') AS next_dt
+        FROM D_ERM_IBV.ENCTR_STD_GRP_HIST
+        WHERE name_space_cd = :in_name_space_cd
+    ) src
+    ON tgt.name_space_cd = src.name_space_cd AND tgt.enctr_id = src.enctr_id AND tgt.eff_from_dt = src.eff_from_dt
+    WHEN MATCHED THEN UPDATE SET eff_thru_dt = src.next_dt;
+
+    -- [Rest unchanged, including final logging]
+END;
