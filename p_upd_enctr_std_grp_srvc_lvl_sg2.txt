@@ -1,0 +1,199 @@
+REPLACE PROCEDURE d_erm_mac.
+p_upd_enctr_std_grp_srvc_lvl_sg2
+ (
+	IN in_name_space_cd	VARCHAR(200),
+	IN in_run_type		VARCHAR(1),
+	IN in_start_dt 		DATE,
+	INOUT out_return_msg 	VARCHAR(4000)
+	) SQL SECURITY OWNER
+BEGIN
+
+	/* p_upd_enctr_std_grp_srvc_lvl_sg2
+	 * Desc: 		This proc will load ENCTR_STD_GRP_HIST / std_grp_volatile
+	 * 				with Service line 2 information.
+	 * 				Complete Delete and Load (ERM is rebuildable from ODS)
+	 * 				All Date-Effectivity will be Month-End and Current Date-1
+	 * 
+	 * Parameters:	in_name_space_cd: The name_space_cd associated with this job
+	 *				in_run_type: 'I' for incremental (Daily) or 'H' for a full historic load
+	 * 
+	 * Usage:		call d_erm_mac.p_upd_enctr_std_grp_srvc_lvl_sg2 (24, 'EPIC-CHICAGO', 'H','2017-05-22','xx');
+	 * Version:		0.0.3
+	 * Change Log:
+	 * 
+	 *  Date 			Who				What
+	 * 12/16/2016		Hari D 			Init
+	 * 06/12/2023		Hari D			4 default categories above when the SG2 service line is null, or ungroupable (sl2) 
+	 * 06/29/2023		Hari D			changed Left Join to EXTO
+	 * 06/29/2023		Hari D			SL1 updated to Neonatology/Normal Newborn for newborn, SL3 updated to care_fmly.
+	 * 11/09/2023		Anne			Added new SG2 procedure category as STD_SRVC_LINE_PCDR. Renamed STD_SRVC_LVL_# to STD_SRVC_LINE_# and LD_%_DT_TM to LOAD_%_DT_TM.
+	 * 
+	 */	
+
+	DECLARE l_start_dt, l_hist_run_dt 	DATE; 
+	DECLARE not_found, l_activity_count NUMBER  default 0;
+	DECLARE l_warn_msg 					VARCHAR(255);
+	DECLARE l_PRCS_NAME                	VARCHAR(55) DEFAULT 'Sg2 Grouping Load';
+  	DECLARE l_SCRIPT_NAME              	VARCHAR(55) DEFAULT 'p_upd_enctr_std_grp_srvc_lvl_sg2';
+  	DECLARE l_STAT_CD                  	VARCHAR(55) DEFAULT 'R';
+  	DECLARE l_BUS_UNIT					VARCHAR(55) DEFAULT 'ALL';
+  	DECLARE l_JOB_ID,l_JOB_DTL_ID		NUMBER default null;
+  	DECLARE l_JOB_REF_ID,l_RUN_ERROR_CD NUMBER DEFAULT 0; 
+  	DECLARE l_RUN_ERROR_MSG            	VARCHAR(2000);
+
+	DECLARE CONTINUE HANDLER FOR SQLSTATE '02000' SET not_found = 1;
+	DECLARE CONTINUE HANDLER FOR SQLWARNING SET l_warn_msg = 'WARN '||SQLCODE;
+	DECLARE EXIT HANDLER FOR SQLEXCEPTION 
+	BEGIN
+		set l_RUN_ERROR_CD = SQLCODE;
+		
+		GET DIAGNOSTICS EXCEPTION 1 l_RUN_ERROR_MSG = MESSAGE_TEXT;
+		CALL D_ERM_MAC.P_ERM_JOB_HISTORY(:l_JOB_ID, :l_PRCS_NAME, :l_BUS_UNIT, :l_SCRIPT_NAME, 'E', 0, 0, 0, :l_RUN_ERROR_CD, :l_SCRIPT_NAME||' failed with error '||:l_RUN_ERROR_MSG,  :l_JOB_ID);
+		RESIGNAL SET MESSAGE_TEXT  =  l_RUN_ERROR_MSG; -- will see only 128 characters in TDE (limitation).
+	END;
+		
+    set l_BUS_UNIT = in_name_space_cd;
+	--set l_hist_run_dt =  to_date('2013-01-01','yyyy-mm-dd');
+	--set l_hist_run_dt =  to_date('2019-04-01','yyyy-mm-dd'); -- Updated 2/23/2020. commented this as the H param gets passed from p_up_enctr_std_grp_hist.
+	set l_start_dt = in_start_dt;
+	    
+	CALL D_ERM_MAC.P_ERM_JOB_HISTORY(:l_JOB_ID, :l_PRCS_NAME, :l_BUS_UNIT, :l_SCRIPT_NAME, :l_STAT_CD, 0, 0, 0, 
+         :l_RUN_ERROR_CD, :l_RUN_ERROR_MSG,  :l_JOB_ID);
+	 
+	-- job detail start std_grp_volatile		
+    CALL D_ERM_MAC.P_ERM_JOB_HISTORY_DTL(:l_JOB_ID, NULL, 0,
+    'Start of Insert into  sg2_grp_volatile for Service line 1 2 3 in_run_type: '||:in_run_type||' ;name_space_cd:'||:in_name_space_cd||' ;l_start_dt'||case when :l_start_dt is null then ' NO DATE ' else cast((:l_start_dt (format 'yyyy-mm-dd')) as varchar(10) ) end, l_JOB_DTL_ID);
+         
+	/*
+	 * SERVICE LEVEL LINE 1,2 and 3 
+	 * ---------------------------------------------------------------
+	 * Below code will load the D_ERM_SBV.std_grp_volatile (defined in calling procedure, p_upd_enctr_std_grp_hist)
+	 * with Service line-2 information.
+	 * Delete/Insert into STG table followed by Update into Main table.
+	 * ---------------------------------------------------------------
+	 */				
+
+INSERT INTO std_grp_volatile(
+         ENCTR_ID,
+         EFF_FROM_DT,
+         REC_AUTH,
+         NAME_SPACE_CD,
+         JOB_ID,
+         LOAD_ADD_DT_TM,
+         LOAD_MOD_DT_TM,
+         EFF_THRU_DT,
+         STD_PTIENT_CLAS,
+         STD_SRVC_LINE_1,
+         STD_SRVC_LINE_2,
+         STD_SRVC_LINE_3,
+         STD_SRVC_LINE_PCDR
+         --,INPTN_COVID_FLG
+		 )
+	WITH MAIN AS (
+		SELECT eh.enctr_id				as ENCTR_ID
+			,me_dt.new_eff_from_dt		as eff_from_dt
+			,eh.REC_AUTH				as REC_AUTH
+			,eh.NAME_SPACE_CD			as NAME_SPACE_CD
+			,:l_JOB_ID 					as JOB_ID
+			,CURRENT_DATE				as LOAD_ADD_DT_TM
+			,CURRENT_DATE				as LOAD_MOD_DT_TM
+			,sl.eff_thru_dt				as eff_thru_dt  ---DATE'2041-01-01' eff_thru_dt 
+			,null						as std_ptient_class
+			/*update 4 default categories above when the SG2 service line is null, or ungroupable (sl2) 6/12/2023
+			,sl.srvc_ln_grp				as STD_SRVC_LINE_1
+			,sl.srvc_ln					as STD_SRVC_LINE_2
+			,sl.care_grp_desc			as STD_SRVC_LINE_3
+			*/
+			,Case
+				WHEN STD.STD_PTIENT_CLAS IN ( 'Exclude From Reports')       				THEN STD.STD_PTIENT_CLAS
+				WHEN STD.STD_PTIENT_CLAS IN ( 'LEGACY CONVERSION')       					THEN STD.STD_PTIENT_CLAS
+				WHEN STD.STD_PTIENT_CLAS IN ( 'Outpatient Without Charges')				 	THEN 'Outpatients Without Charges'
+				when std.STD_PTIENT_CLAS IN ( 'Inpatient Normal Newborn') and sl.srvc_ln_grp is null	THEN 'Neonatology/Normal Newborn'		
+				When sl.srvc_ln_grp is null  then 'Uncoded'
+				Else sl.srvc_ln_grp
+			 end STD_SRVC_LINE_1
+			,Case
+				WHEN STD.STD_PTIENT_CLAS IN ( 'Exclude From Reports')       				THEN STD.STD_PTIENT_CLAS
+				WHEN STD.STD_PTIENT_CLAS IN ( 'LEGACY CONVERSION')       					THEN STD.STD_PTIENT_CLAS
+				WHEN STD.STD_PTIENT_CLAS IN ( 'Outpatient Without Charges')				 	THEN 'Outpatients Without Charges'
+				when std.STD_PTIENT_CLAS IN ( 'Inpatient Normal Newborn') and sl.srvc_ln is null	THEN 'Normal Newborn'		
+				When sl.srvc_ln is null  then 'Uncoded'
+				Else sl.srvc_ln
+			 end STD_SRVC_LINE_2
+			,Case
+				WHEN STD.STD_PTIENT_CLAS IN ( 'Exclude From Reports')       				THEN STD.STD_PTIENT_CLAS
+				WHEN STD.STD_PTIENT_CLAS IN ( 'LEGACY CONVERSION')       					THEN STD.STD_PTIENT_CLAS
+				WHEN STD.STD_PTIENT_CLAS IN ( 'Outpatient Without Charges')				 	THEN 'Outpatients Without Charges'
+				when std.STD_PTIENT_CLAS IN ( 'Inpatient Normal Newborn') and sl.care_fmly is null	THEN 'Normal Newborn'		
+				When sl.care_fmly is null  then 'Uncoded'
+				Else sl.care_fmly
+			 end STD_SRVC_LINE_3
+		    ,case 
+		    	WHEN coalesce(sl.pcdr_ctgy,'Ungroupable') = 'Ungroupable' then 'No Procedure'  
+     			Else nvl(trim(strtok(sl.pcdr_ctgy,':',2)),sl.pcdr_ctgy)  -- Need to match Outpatient w/ Inpatient category values
+			 end STD_SRVC_LINE_PCDR
+		
+		from D_ERM_IBV.ENCTR_HIST eh
+		join me_dt on(me_dt.new_eff_from_dt between eh.eff_from_dt and eh.eff_thru_dt)
+		left join D_EXTO_IBV.ENCTR_SRVC_LN_GRPR sl on sl.name_space_cd = eh.name_space_cd and sl.enctr_id = eh.enctr_id and /*date'2022-01-31'*/ me_dt.new_eff_from_dt between sl.eff_from_dt and sl.eff_thru_dt
+		left outer join std_grp_volatile STD on (eh.enctr_id = STD.enctr_id     AND STD.eff_from_dt = me_dt.new_eff_from_dt     and eh.name_space_cd = STD.name_space_cd)
+		where eh.NAME_SPACE_CD = :in_name_space_cd --'EPIC_TC-125' --:in_NAME_SPACE_CD
+--		and date'2022-01-31' between eh.eff_from_dt and eh.eff_thru_dt
+		and (exists (select 1 from prcs_ctrl where prcs_ctrl.enctr_id = eh.enctr_id and prcs_ctrl.name_space_cd = eh.name_space_cd)
+			)
+					),
+
+	prcs_ctrl as (
+		select prcs_ctrl.enctr_id, 
+			prcs_ctrl.name_space_cd
+		from  D_ERM_IBV.enctr_prcs_cntrl prcs_ctrl
+		where prcs_ctrl.NAME_SPACE_CD = :in_name_space_cd 
+			and ( (prcs_ctrl.std_grpg_rsult_dt is null or prcs_ctrl.std_grpg_rsult_dt < prcs_ctrl.std_grpg_extc_dt)
+			OR  (:in_run_type in ('H','S') AND coalesce(prcs_ctrl.std_grpg_rsult_dt, date'2041-01-01') >= :l_start_dt) ) ),
+--			OR  ('I' /*:in_run_type*/ in ('H','S') AND coalesce(prcs_ctrl.std_grpg_rsult_dt, date'2041-01-01') >= date'2022-01-01' /*:l_start_dt*/)  )  -- new History and Start Date logic		),
+	me_dt as 	(
+		select  calendar_date new_eff_from_dt 
+		from D_SHR_ACCV.PERIOD_CALENDAR x
+		where (x.calendar_date = last_day(x.calendar_date) or x.calendar_date = current_date -1 )
+		AND (
+                                ('H' = :in_run_type and x.calendar_date between  :l_start_dt and current_date -1 )
+                                   OR (:in_run_type in ('I','S') AND x.calendar_date <= current_date AND x.calendar_date  >= :l_start_dt )
+			)
+				)
+				
+                  
+	select
+		ENCTR_ID
+		,eff_from_dt
+		,REC_AUTH
+		,NAME_SPACE_CD
+		,JOB_ID
+		,LOAD_ADD_DT_TM
+		,LOAD_MOD_DT_TM
+		,eff_thru_dt
+		,std_ptient_class
+		,STD_SRVC_LINE_1
+		,STD_SRVC_LINE_2
+		,STD_SRVC_LINE_3
+		,STD_SRVC_LINE_PCDR
+		--,null as INPTN_COVID_FLG
+	from main
+	;
+
+	
+	
+	SET l_activity_count = activity_count;				
+	
+    CALL D_ERM_MAC.P_ERM_JOB_HISTORY_DTL(:l_JOB_ID, :l_JOB_DTL_ID, l_activity_count,
+    'End of Insert into  std_grp_volatile for Service line 1 2 3 in_run_type: '||:in_run_type||' ;name_space_cd:'||:in_name_space_cd||' ;l_start_dt'||case when :l_start_dt is null then ' NO DATE ' else cast((:l_start_dt (format 'yyyy-mm-dd')) as varchar(10) ) end, l_JOB_DTL_ID);
+    
+	/*
+	 * Collect statistics for std_grp_volatile table.
+	 */
+ 	COLLECT STATISTICS COLUMN (PARTITION), COLUMN (ENCTR_ID), COLUMN (name_space_cd), COLUMN (STD_SRVC_LINE_2)  on std_grp_volatile;
+	
+    --final Job History         
+	CALL D_ERM_MAC.P_ERM_JOB_HISTORY(:l_JOB_ID, :l_PRCS_NAME, :l_BUS_UNIT, :l_SCRIPT_NAME, 'C', l_activity_count, 0, 0,:l_RUN_ERROR_CD, :l_RUN_ERROR_MSG,  :l_JOB_ID);    	     
+    set out_return_msg =  'Ended';
+    
+END;
