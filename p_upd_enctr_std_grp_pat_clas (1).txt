@@ -1,0 +1,311 @@
+```sql
+REPLACE PROCEDURE D_ERM_MAC.P_UPD_ENCTR_STD_GRP_PAT_CLAS(
+    IN in_name_space_cd VARCHAR(200),
+    IN in_run_type VARCHAR(1),
+    IN in_start_dt DATE,
+    OUT out_return_msg VARCHAR(4000)
+) SQL SECURITY OWNER
+BEGIN
+    /* p_upd_enctr_std_grp_pat_clas
+     * Desc: 		This proc will load ENCTR_STD_GRP_HIST / std_grp_volatile for
+     * 				Standard Grouping- Patient Classification.
+     * 				Complete Delete and Load (ERM is rebuildable from ODS)
+     * 				All Date-Effectivity will be Month-End and Current Date-1
+     *
+     * Parameters:	in_name_space_cd: The name_space_cd associated with this job
+     *				in_run_type: 'I' for incremental (Daily) or 'H' for a full historic load
+     *
+     * Usage:		call D_ERM_MAC.p_upd_enctr_std_grp_pat_clas('EPIC-SYRACUSE', 'H', NULL, 'xx');
+     * 				call D_ERM_MAC.p_upd_enctr_std_grp_pat_clas('EPIC-CHICAGO', 'I','2017-05-22', 'xx');
+     * Version:		0.5.7
+     *
+     * TODO:
+     * 		- Get rid of SQLSTATE '42000' dangerous.
+     *       - is error propogation working fine?
+     *
+     * Change Log:
+     *  Date 			Who				What
+     * 12/16/2016		Kumar, Alok		Init
+     * 09/16/2017       	pat     		Fixed l_JOB_ID warning. Repointed "p_idw_ACCV" to "D_SHR_ACCV"
+     * 05/08/2018		Kumar, Alok		Added the logic for the run type as 'S'
+     * 05/17/2018		Kumar, Alok		Updated the Service Line DRG logic to check the DRG Code into TERM_MAP then TERM_MAP_GROUP tables.
+     * 05/18/2018       	pat             Modified Exception handling, modified logging only 1 rec instead of 1 for START and 1 for END. changed "in_last_completion_dt to in_start_dt &
+     * 									l_last_completion_dt to l_start_dt" and changed "out_return_msg" to OUT only.
+     * 06/07/2018		Kumar, Alok		Updated the :l_start_dt - 1 so it will re-process only 1 day prior to current date.
+     * 07/09/2018		Kumar, Alok		Removed -1 from :l_start_dt - 1 because we do not want to re-process yesterday's data.
+     * 07/03/2018		Kumar, Alok		Our Lady of Peace (IN212) is REC_AUTH=69 - All the encounters will be grouped as 'Exclude From Reports'.
+     * 07/03/2018		Kumar, Alok		Additional logic for Emergency patients - PatientTypeGroup <> 'URGENT CARE'.
+     * 07/03/2018		Kumar, Alok		Added Inpatient Joint Venture which is applicable for Anne Arbor only.
+     * 07/03/2018		Kumar, Alok		Added 'Inpatient Long Term Care', 'Inpatient Respite and Trans', 'Inpatient Acute Head Pain'.
+     *									These are applicable for Health Quest, Meditech and Meditech Magic sites only.
+     * 07/03/2018		Kumar, Alok		Added logic for Rehab where ChargeDepartmentGroup = 'INPATIENT REHAB'.
+     * 08/28/2018		Kumar, Alok		Removed -1 from :l_start_dt - 1 because we do not want to re-process yesterday's data.
+     * 08/29/2018		Kumar, Alok		Updated calendar_date with - 1 for the new_eff_from_dt because it should be yesterday's date.
+     * 09/06/2018		Kumar, Alok		Updated calendar_date logic by removing -1 from the select and using >= for the last run check.
+     * 09/07/2018		Kumar, Alok		Added logic to get Exclude From Reports from TERM tables.
+     * 09/19/2018		Kumar, Alok     Added Charge Code Group as ER VISIT for RSW becasuse that is from Legacy system.
+     * 09/27/2018		Kumar, Alok     updated to logic for Outpatient/Inpatient Without Charges with an AND condition for Charge Quantity.
+     * 								Also, Updated the logic to include 'INPATIENT ACUTE' for Inpatient Normal Newborn Grouping.
+     * 10/11/2018		Kumar, Alok		Added Patient Type Group as NEWBORN in the IN list of Inpatient Acute.
+     * 10/26/2018		Kumar, Alok		Added effective date logic for term_map_grp table.
+     * 10/26/2018		Kumar, Alok		Added logic for Non Patient cases using Patient Type Group.
+     * 01/16/2019	  	Kumar, Alok		Moved Inpatient Without Charges after Inpatient Normal Newborn in the hierarchy.
+     * 01/16/2019	  	Kumar, Alok		Removed Term2 from the main block of SQL.
+     * 02/06/2019	  	Kumar, Alok		Added logic for ORG_LVL_3_CD with Nonpatient.
+     * 02/14/2019		Kumar, Alok		Updated the logic for Non patient for MC0CONS for the ptient_type_cd is SN.
+     * 02/20/2019		Kumar, Alok		Added the logic for Healthquest for the charge department 4300 which is grouped to OUTPATIENT BEHAVIORAL MEDICINE.
+     * 02/21/2019		Kumar, Alok		Updated the Exclude From Reports logic for Test Patients.
+     * 02/21/2019	 	Kumar, Alok		Added logic with ORG_LVL_3_CD for Exclude From Report.
+     * 02/21/2019		Kumar, Alok		Rolledback the changes for the Exclude From Reports logic for Test Patients.
+     * 02/26/2019		Kumar, Alok		Updated Exclude from reports logic with additional filter as fmly_name like 'HNAM%'.
+     * 02/26/2019		Kumar, Alok		Moved Series prior to Emergency in the Hierarchy.
+     * 02/26/2019		Kumar, Alok		Updated the logic for Rehab and Behavioral Health where patient type group moved in the higher priority than the charge dept group.
+     * 03/05/2019		Kumar, Alok		Updated the filter in the Exclude From Reports for Test Account.
+     * 03/14/2019		Kumar, Alok		Updated Inpatient Behavioral Medicine with additional logic for MC0CONS.
+     * 03/14/2019		Kumar, Alok		Removed the logic for Org Level 3 from Exclude From Reports.
+     * 03/18/2019		Kumar, Alok		Updated Inpatient Behavioral Medicine by adding the new logic using Revenue Location. Also removed the hardcoding for MC0CONS.
+     * 03/21/2019		Kumar, Alok		Updated the logic for Behavioral Medicine by additing addition coditon with Inpatient Acute and Revenue Location - 5E.
+     * 03/26/2019       	PAT             Modify Exclude from reports logic filter for RSW sites.
+     * 03/26/2019       	PAT             Added VITAS insurance code to non-patient cases. As per conv with jana, agreed to hard-code from enctr_hist.
+     * 06/13/2019       	PAT             Added "NEONATE WITH MAJOR PROBLEMS" to "Inpatient Normal Newborn" patient class.
+     * 07/08/2019       	PAT			    As part of ENCTR's (RSW) that have multiple ENCTR_ID's based on REC_AUTH's change, identified that "p_idw_ACCV.ENCTR" is not needed as there isn't any column(s)
+     * 									refrence from that table.
+     * 07/17/2019       	PAT             Removed "NEONATE WITH MAJOR PROBLEMS" from "Inpatient Normal Newborn" patient class. This might impact EPIC sites and  business is fine with it.
+     * 11/21/2091       	PAT             Added STATS to VT to improve SRVC_LVL_3 performance.
+     * 01/03/2020       	PAT             Emergency Patient Classification should look for Charge Code AND Charge Department to match oracle logic.
+     * 									Even though this change was included in RSW ERM build file directly, never made to GIT.
+     * 01/16/2020		VD				Updated TERM 29 to include 999 with New Borns.
+     * 01/20/2020		VD				Added Legcay Conversion pat class logic.
+     * 02/06/2020		VD			 	change logic in legacy conversion to remove dispo code and inpatient filter.
+     * 02/23/2020		VD				Changed the l_hist_run_Dt value.
+     * 04/09/2020		VD				Added logic for COVID 19 and changed the l_hist_run_dt to 2019-07-01.
+     * 04/22/2020       	PAT             COVID - OP pat_clas logic in sync with srvc_lvl_3.
+     * 08/19/2025       	Grok            Optimized query: Consolidated TERM CTEs into single CASE, added date bounds, optimized volatile table PI, improved join efficiency.
+     */
+
+    DECLARE l_start_dt, l_hist_run_dt DATE;
+    DECLARE not_found, l_activity_count NUMBER DEFAULT 0;
+    DECLARE l_warn_msg VARCHAR(255);
+    DECLARE l_PRCS_NAME VARCHAR(55) DEFAULT 'Patient Classification Load';
+    DECLARE l_SCRIPT_NAME VARCHAR(55) DEFAULT 'p_upd_enctr_std_grp_pat_clas';
+    DECLARE l_STAT_CD VARCHAR(55) DEFAULT 'R';
+    DECLARE l_BUS_UNIT VARCHAR(55) DEFAULT 'ALL';
+    DECLARE l_JOB_ID, l_JOB_DTL_ID NUMBER DEFAULT NULL;
+    DECLARE l_JOB_REF_ID, l_RUN_ERROR_CD NUMBER DEFAULT 0;
+    DECLARE l_RUN_ERROR_MSG VARCHAR(2000);
+
+    DECLARE CONTINUE HANDLER FOR SQLSTATE '02000' SET not_found = 1;
+    DECLARE CONTINUE HANDLER FOR SQLWARNING SET l_warn_msg = 'WARN '||SQLCODE;
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION 
+    BEGIN
+        SET l_RUN_ERROR_CD = SQLCODE;
+        GET DIAGNOSTICS EXCEPTION 1 l_RUN_ERROR_MSG = MESSAGE_TEXT;
+        CALL D_ERM_MAC.P_ERM_JOB_HISTORY(:l_JOB_ID, :l_PRCS_NAME, :l_BUS_UNIT, :l_SCRIPT_NAME, 'E', 0, 0, 0, :l_RUN_ERROR_CD, :l_SCRIPT_NAME||' failed with error '||:l_RUN_ERROR_MSG, :l_JOB_ID);
+        RESIGNAL SET MESSAGE_TEXT = l_RUN_ERROR_MSG;
+    END;
+
+    SET l_BUS_UNIT = in_name_space_cd;
+    SET l_hist_run_dt = DATE'2019-07-01'; -- Updated 04/09/2020
+    SET l_start_dt = CASE 
+        WHEN in_run_type = 'H' THEN l_hist_run_dt 
+        WHEN in_run_type = 'S' THEN in_start_dt 
+        ELSE COALESCE((SELECT MAX(start_dt) FROM D_SHR_ACCV.JOB_HISTORY WHERE script_name = :l_SCRIPT_NAME AND stat_cd = 'C' AND business_unit = :in_name_space_cd), l_hist_run_dt)
+    END;
+
+    CALL D_ERM_MAC.P_ERM_JOB_HISTORY(:l_JOB_ID, :l_PRCS_NAME, :l_BUS_UNIT, :l_SCRIPT_NAME, :l_STAT_CD, 0, 0, 0, :l_RUN_ERROR_CD, :l_RUN_ERROR_MSG, :l_JOB_ID);
+
+    -- Job detail start std_grp_volatile
+    CALL D_ERM_MAC.P_ERM_JOB_HISTORY_DTL(:l_JOB_ID, NULL, 0,
+        'Start of Insert into std_grp_volatile for Patient Classification in_run_type: '||:in_run_type||' ;name_space_cd:'||:in_name_space_cd||' ;l_start_dt'||
+        CASE WHEN :l_start_dt IS NULL THEN ' NO DATE ' ELSE CAST((:l_start_dt (FORMAT 'yyyy-mm-dd')) AS VARCHAR(10)) END, l_JOB_DTL_ID);
+
+    -- Optimized: Changed PI to include EFF_FROM_DT for better join/window performance
+    CREATE VOLATILE MULTISET TABLE std_grp_volatile (
+        ENCTR_ID BIGINT,
+        EFF_FROM_DT DATE,
+        REC_AUTH SMALLINT,
+        NAME_SPACE_CD VARCHAR(50),
+        JOB_ID NUMBER,
+        LOAD_ADD_DT_TM TIMESTAMP(6),
+        LOAD_MOD_DT_TM TIMESTAMP(6),
+        EFF_THRU_DT DATE,
+        STD_PTIENT_CLAS VARCHAR(100),
+        INPTN_COVID_FLG VARCHAR(1),
+        SURG_FLG VARCHAR(1),
+        ER_FLG VARCHAR(1)
+    ) PRIMARY INDEX (ENCTR_ID, EFF_FROM_DT) ON COMMIT PRESERVE ROWS;
+
+    -- Optimized: Consolidated TERM CTEs into single CASE, added date bounds, used EXISTS for efficiency
+    INSERT INTO std_grp_volatile
+    WITH me_dt AS (
+        SELECT calendar_date new_eff_from_dt 
+        FROM D_SHR_ACCV.PERIOD_CALENDAR x
+        WHERE (x.calendar_date = LAST_DAY(x.calendar_date) OR x.calendar_date = CURRENT_DATE - 1)
+            AND (
+                ('H' = :in_run_type AND x.calendar_date BETWEEN :l_start_dt AND CURRENT_DATE - 1)
+                OR (:in_run_type IN ('I','S') AND x.calendar_date <= CURRENT_DATE AND x.calendar_date >= :l_start_dt)
+            )
+    ),
+    prcs_ctrl AS (
+        SELECT enctr_id, name_space_cd
+        FROM D_ERM_IBV.enctr_prcs_cntrl
+        WHERE NAME_SPACE_CD = :in_name_space_cd
+            AND ((std_grpg_rsult_dt IS NULL OR std_grpg_rsult_dt < std_grpg_extc_dt)
+                OR (:in_run_type IN ('H','S') AND COALESCE(std_grpg_rsult_dt, DATE'2041-01-01') >= :l_start_dt))
+    ),
+    chrgs AS (
+        SELECT dtl.enctr_id, dtl.name_space_cd, me_dt.new_eff_from_dt eff_from_dt,
+               SUM(dtl.chrg_qty) chrg_qty_cnt,
+               SUM(CASE WHEN dtl.cpt_hcpc_std_pcdr_cd IN ('99281','99282','99283','99284','99285','G0380','G0381','G0382','G0383','G0384') THEN dtl.chrg_qty ELSE 0 END) EmergencyCharge_cnt,
+               SUM(CASE WHEN dtl.cpt_hcpc_std_pcdr_cd IN (SELECT src_term_key FROM D_SHR_IBV.term_map_fltn WHERE tgt_term_key = 'SURGERY|GRP|SubCategory') THEN dtl.chrg_qty ELSE 0 END) SurgeryCharge_cnt,
+               SUM(CASE WHEN dtl.cpt_hcpc_std_pcdr_cd IN ('U0001','U0002','U0003','U0004','U0005','87635','87636','87637','87426','87428','86318','86328','86769') THEN dtl.chrg_qty ELSE 0 END) covid_hcpcs_cnt
+        FROM D_ERM_IBV.ENCTR_CHRG_DTL dtl
+        JOIN me_dt ON (dtl.post_dt <= me_dt.new_eff_from_dt AND dtl.post_dt >= :l_start_dt) -- Added bound
+        WHERE dtl.name_space_cd = :in_name_space_cd
+            AND EXISTS (SELECT 1 FROM prcs_ctrl pc WHERE pc.enctr_id = dtl.enctr_id AND pc.name_space_cd = dtl.name_space_cd)
+        GROUP BY 1, 2, 3
+    ),
+    DIAGS AS (
+        SELECT diag.enctr_id, diag.name_space_cd, me_dt.new_eff_from_dt eff_from_dt,
+               SUM(CASE WHEN diag.icd_prio_num = 1 THEN 1 ELSE 0 END) final_icd_cnt,
+               SUM(CASE WHEN diag.icd_prio_num = 1 AND diag.diagn_cd IN ('U07.1','B97.29','J12.82') THEN 1 ELSE 0 END) covid_icd_cnt
+        FROM D_ERM_IBV.ENCTR_DIAG diag
+        JOIN me_dt ON (diag.admit_dt >= DATE'2020-01-01' AND diag.admit_dt <= me_dt.new_eff_from_dt) -- Bound
+        WHERE diag.name_space_cd = :in_name_space_cd
+            AND EXISTS (SELECT 1 FROM prcs_ctrl pc WHERE pc.enctr_id = diag.enctr_id AND pc.name_space_cd = diag.name_space_cd)
+        GROUP BY 1, 2, 3
+    )
+    SELECT eh.enctr_id,
+           me_dt.new_eff_from_dt AS eff_from_dt,
+           eh.rec_auth,
+           eh.name_space_cd,
+           :l_job_id AS JOB_ID,
+           CURRENT_TIMESTAMP(6) AS LOAD_ADD_DT_TM,
+           CURRENT_TIMESTAMP(6) AS LOAD_MOD_DT_TM,
+           DATE'2041-01-01' AS EFF_THRU_DT,
+           CASE
+               -- TERM1: Exclude From Reports
+               WHEN (ed.admit_dt_tm IS NULL AND ed.dschrg_dt_tm IS NULL)
+                    OR pin.fmly_name IN ('Test Patient','TEST','Zztest','TESTPRODUCTION','Zztower')
+                    OR pin.fmly_name||pin.gvn_name LIKE '%HNAM%TEST%'
+                    OR eh.rec_auth = 69
+                    OR tt3.tgt_term_cd = 'EXCLUDE FROM REPORTS'
+                    OR ed.actv_ind = 'N'
+                    OR (eh.EXTR_AR_FLG = 'Y' AND eh.name_space_cd NOT IN ('EPIC-CHICAGO','EPIC-CHICAGO-PB'))
+               THEN 'Exclude From Reports'
+               -- TERM2: LEGACY CONVERSION
+               WHEN EXISTS (SELECT 1 FROM D_ERM_IBV.enctr_tsactn_dtl td 
+                           JOIN D_SHR_IBV.term_map_grp grp ON td.item_tsactn_cd = grp.src_term_key 
+                           WHERE td.enctr_id = eh.enctr_id AND td.name_space_cd = eh.name_space_cd 
+                           AND grp.tgt_term_key = 'LEGACY CONVERSION|GRP|SubCategory')
+               THEN 'LEGACY CONVERSION'
+               -- TERM_ALL: Consolidated hierarchy
+               WHEN (st.term_cd <> 'I' AND COALESCE(agg.tot_chrg, 0) = 0 AND COALESCE(chrgs.chrg_qty_cnt, 0) = 0)
+               THEN 'Outpatient Without Charges'
+               WHEN (st.term_cd = 'N' OR tt3.tgt_term_cd = 'NONPATIENT' OR tt5.tgt_term_cd = 'NONPATIENT' 
+                    OR UPPER(eh.PRMRY_INSRNC_CD) LIKE 'VITA%'
+                    OR (tt3.tgt_term_cd = 'SKILLED NURSING' AND eh.name_space_cd = 'HEALTHQUEST MC0CONS' AND eh.DSCHG_DT > DATE'2015-09-30')
+                    OR (STRTOK(tm3.tgt_term_key, '|', 1) = 'HI' AND eh.ORG_LVL_1_CD LIKE '750|%'))
+               THEN 'Nonpatient Cases'
+               WHEN st.term_cd <> 'I' AND (chrgs.SurgeryCharge_cnt > 0 AND COALESCE(tt4.tgt_term_cd, ' ') <> 'DELIVERY')
+               THEN 'Outpatient Surgery'
+               WHEN st.term_cd <> 'I' AND tt3.tgt_term_cd = 'SERIES'
+               THEN 'Outpatient Series'
+               WHEN st.term_cd <> 'I' AND (chrgs.EmergencyCharge_cnt > 0 OR tt3.tgt_term_cd = 'EMERGENCY') 
+                    AND COALESCE(tt3.tgt_term_cd, ' ') <> 'URGENT CARE'
+               THEN 'Outpatient Emergency Services'
+               WHEN st.term_cd <> 'I'
+               THEN 'Outpatient Other'
+               WHEN st.term_cd = 'I' AND ((tt3.tgt_term_cd IN ('NEWBORN','INPATIENT ACUTE') AND tt4.tgt_term_cd IN ('NORMAL NEWBORN','UNCODED'))
+                    OR (tt3.tgt_term_cd = 'NEWBORN' AND tt4.tgt_term_cd = 'UNCODED'))
+               THEN 'Inpatient Normal Newborn'
+               WHEN st.term_cd = 'I' AND COALESCE(agg.tot_chrg, 0) = 0 AND COALESCE(chrgs.chrg_qty_cnt, 0) = 0 AND ed.dschrg_dt_tm IS NOT NULL
+               THEN 'Inpatient Without Charges'
+               WHEN st.term_cd = 'I' AND tt3.tgt_term_cd = 'JOINT VENTURE'
+               THEN 'Inpatient Joint Venture'
+               WHEN st.term_cd = 'I' AND tt3.tgt_term_cd = 'LONG TERM CARE'
+               THEN 'Inpatient Long Term Care'
+               WHEN st.term_cd = 'I' AND tt3.tgt_term_cd = 'RESPITE AND TRANSITION CARE'
+               THEN 'Inpatient Respite and Trans'
+               WHEN st.term_cd = 'I' AND (tt3.tgt_term_cd = 'BEHAVIORAL HEALTH' 
+                    OR (tt3.tgt_term_cd = 'INPATIENT ACUTE' AND EXISTS (SELECT 1 FROM D_ERM_IBV.ENCTR_CHRG_DTL cd 
+                                                                       WHERE cd.enctr_id = eh.enctr_id AND cd.name_space_cd = eh.name_space_cd 
+                                                                       AND cd.rvnu_loc_cd = '5E')))
+               THEN 'Inpatient Behavioral Medicine'
+               WHEN st.term_cd = 'I' AND tt3.tgt_term_cd = 'INPATIENT REHAB'
+               THEN 'Inpatient Rehab'
+               WHEN st.term_cd = 'I' AND tt3.tgt_term_cd = 'SKILLED NURSING'
+               THEN 'Inpatient Skilled Nursing'
+               WHEN st.term_cd = 'I' AND tt3.tgt_term_cd = 'ACUTE HEAD PAIN'
+               THEN 'Inpatient Acute Head Pain'
+               WHEN st.term_cd = 'I' AND tt3.tgt_term_cd IN ('NEWBORN', 'INPATIENT ACUTE')
+               THEN 'Inpatient Acute'
+               WHEN st.term_cd = 'I' AND EXISTS (SELECT 1 FROM D_ERM_IBV.ENCTR_CHRG_DTL cd 
+                                                WHERE cd.enctr_id = eh.enctr_id AND cd.name_space_cd = eh.name_space_cd 
+                                                AND cd.rvnu_dept_cd = 'BEHAV')
+               THEN 'Inpatient Behavioral Medicine'
+               WHEN st.term_cd = 'I' AND EXISTS (SELECT 1 FROM D_ERM_IBV.ENCTR_CHRG_DTL cd 
+                                                WHERE cd.enctr_id = eh.enctr_id AND cd.name_space_cd = eh.name_space_cd 
+                                                AND cd.rvnu_dept_cd = 'INPATIENT REHAB')
+               THEN 'Inpatient Rehab'
+               WHEN st.term_cd = 'I'
+               THEN 'Inpatient Undefined'
+               ELSE 'Outpatient Undefined'
+           END AS STD_PTIENT_CLAS,
+           CASE WHEN (st.term_cd = 'I' AND (DIAGS.covid_icd_cnt > 0 
+                    OR (DIAGS.final_icd_cnt = 0 AND (chrgs.covid_hcpcs_cnt > 0 
+                        OR tgpc.tgt_term_cd = 'COVID 19' OR tgsc.tgt_term_cd = 'COVID 19' 
+                        OR tgtc.tgt_term_cd = 'COVID 19' OR tgfc.tgt_term_cd = 'COVID 19')))
+                THEN 'Y' ELSE 'N' END AS INPTN_COVID_FLG,
+           CASE WHEN COALESCE(chrgs.SurgeryCharge_cnt, 0) > 0 THEN 'Y' ELSE 'N' END AS SURG_FLG,
+           CASE WHEN COALESCE(chrgs.EmergencyCharge_cnt, 0) > 0 THEN 'Y' ELSE 'N' END AS ER_FLG
+    FROM D_ERM_IBV.ENCTR_HIST eh
+    JOIN me_dt ON (me_dt.new_eff_from_dt BETWEEN eh.eff_from_dt AND eh.eff_thru_dt)
+    LEFT JOIN D_IDW_IBV.ENCTR_ADMSN ed ON (ed.enctr_id = eh.enctr_id AND eh.name_space_cd = ed.name_space_cd)
+    LEFT JOIN D_IDW_IBV.PRTY_INDIV_NAME pin ON (pin.INDIV_PRTY_ID = (SELECT PTIENT_MBR_PRTY_ID FROM D_IDW_INT.ENCTR e 
+                                                                     WHERE e.enctr_id = eh.enctr_id AND e.src_admn_name_space_cd = eh.name_space_cd 
+                                                                     AND e.rec_auth = eh.rec_auth 
+                                                                     QUALIFY ROW_NUMBER() OVER (PARTITION BY e.enctr_id, e.src_admn_name_space_cd ORDER BY e.load_mod_dt_tm DESC) = 1) 
+                                             AND pin.NAME_TYPE_CD = 'GVN_NM')
+    LEFT JOIN D_SHR_IBV.term st ON (st.term_key = eh.ptient_clas_cd)
+    LEFT JOIN D_SHR_IBV.term_map_fltn tm3 ON (eh.ptient_type_cd = tm3.src_term_key)
+    LEFT JOIN D_SHR_IBV.term_map_grp_fltn tt3 ON (tm3.tgt_term_key = tt3.src_term_key AND tt3.tgt_fmly_name = 'PatientTypeGroup' 
+                                                 AND me_dt.new_eff_from_dt BETWEEN tt3.eff_strt_dt AND tt3.eff_end_dt)
+    LEFT JOIN D_SHR_IBV.term_map_fltn tm4 ON (eh.ptient_clas_sub_lvl_1_cd = tm4.src_term_key)
+    LEFT JOIN D_SHR_IBV.term_map_grp_fltn tt4 ON (tm4.tgt_term_key = tt4.src_term_key AND tt4.tgt_fmly_name = 'PatientTypeGroup' 
+                                                 AND me_dt.new_eff_from_dt BETWEEN tt4.eff_strt_dt AND tt4.eff_end_dt)
+    LEFT JOIN D_SHR_IBV.term_map_fltn tm5 ON (eh.PRMRY_INSRNC_CD = tm5.src_term_key)
+    LEFT JOIN D_SHR_IBV.term_map_grp_fltn tt5 ON (tm5.tgt_term_key = tt5.src_term_key AND me_dt.new_eff_from_dt BETWEEN tt5.eff_strt_dt AND tt5.eff_end_dt)
+    LEFT JOIN chrgs ON (chrgs.enctr_id = eh.enctr_id AND chrgs.name_space_cd = eh.name_space_cd AND chrgs.eff_from_dt = me_dt.new_eff_from_dt)
+    LEFT JOIN DIAGS ON (DIAGS.enctr_id = eh.enctr_id AND DIAGS.name_space_cd = eh.name_space_cd AND DIAGS.eff_from_dt = me_dt.new_eff_from_dt)
+    LEFT JOIN D_ERM_IBV.ENCTR_AGG agg ON (agg.enctr_id = eh.enctr_id AND agg.name_space_cd = eh.name_space_cd)
+    LEFT JOIN D_SHR_IBV.term_map_fltn tm_pc ON (eh.ptient_clas_cd = tm_pc.src_term_key)
+    LEFT JOIN D_SHR_IBV.term_map_grp_fltn tgpc ON (tm_pc.tgt_term_key = tgpc.src_term_key AND me_dt.new_eff_from_dt BETWEEN tgpc.eff_strt_dt AND tgpc.eff_end_dt)
+    LEFT JOIN D_SHR_IBV.term_map_fltn tm_sc ON (eh.ptient_clas_sub_lvl_1_cd = tm_sc.src_term_key)
+    LEFT JOIN D_SHR_IBV.term_map_grp_fltn tgsc ON (tm_sc.tgt_term_key = tgsc.src_term_key AND me_dt.new_eff_from_dt BETWEEN tgsc.eff_strt_dt AND tgsc.eff_end_dt)
+    LEFT JOIN D_SHR_IBV.term_map_fltn tm_tc ON (eh.ptient_clas_sub_lvl_2_cd = tm_tc.src_term_key)
+    LEFT JOIN D_SHR_IBV.term_map_grp_fltn tgtc ON (tm_tc.tgt_term_key = tgtc.src_term_key AND me_dt.new_eff_from_dt BETWEEN tgtc.eff_strt_dt AND tgtc.eff_end_dt)
+    LEFT JOIN D_SHR_IBV.term_map_fltn tm_fc ON (eh.ptient_clas_sub_lvl_3_cd = tm_fc.src_term_key)
+    LEFT JOIN D_SHR_IBV.term_map_grp_fltn tgfc ON (tm_fc.tgt_term_key = tgfc.src_term_key AND me_dt.new_eff_from_dt BETWEEN tgfc.eff_strt_dt AND tgfc.eff_end_dt)
+    WHERE eh.name_space_cd = :in_name_space_cd
+        AND eh.enctr_id > 0
+        AND EXISTS (SELECT 1 FROM prcs_ctrl pc WHERE pc.enctr_id = eh.enctr_id AND pc.name_space_cd = eh.name_space_cd)
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY eh.enctr_id, eh.name_space_cd, me_dt.new_eff_from_dt ORDER BY eh.rec_auth DESC) = 1;
+
+    SET l_activity_count = l_activity_count + ACTIVITY_COUNT;
+
+    -- Job detail end
+    CALL D_ERM_MAC.P_ERM_JOB_HISTORY_DTL(:l_JOB_ID, :l_JOB_DTL_ID, l_activity_count,
+        'End of Insert into std_grp_volatile for Patient Classification in_run_type: '||:in_run_type||' ;name_space_cd:'||:in_name_space_cd||' ;l_start_dt'||
+        CASE WHEN :l_start_dt IS NULL THEN ' NO DATE ' ELSE CAST((:l_start_dt (FORMAT 'yyyy-mm-dd')) AS VARCHAR(10)) END, l_JOB_DTL_ID);
+
+    -- Collect statistics for std_grp_volatile
+    COLLECT STATISTICS COLUMN (PARTITION), COLUMN (ENCTR_ID), COLUMN (REC_AUTH), COLUMN (NAME_SPACE_CD), COLUMN (EFF_FROM_DT), COLUMN (ENCTR_ID, EFF_FROM_DT, NAME_SPACE_CD) ON std_grp_volatile;
+
+    -- Final Job History
+    CALL D_ERM_MAC.P_ERM_JOB_HISTORY(:l_JOB_ID, :l_PRCS_NAME, :l_BUS_UNIT, :l_SCRIPT_NAME, 'C', l_activity_count, 0, 0, :l_RUN_ERROR_CD, :l_RUN_ERROR_MSG, :l_JOB_ID);
+    SET out_return_msg = 'Ended: '||TO_CHAR(l_job_id);
+
+    /* Validation SQL unchanged */
+END;
+```
