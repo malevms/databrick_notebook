@@ -1,0 +1,1625 @@
+EXPLAIN WITH MAIN AS (
+        SELECT enctr_hist.enctr_id,
+            me_dt.new_eff_from_dt eff_from_dt,
+            DATE'2041-01-01' eff_thru_dt,
+             --<<<< this is set later AFTER you know what record exists for the enctr!!!!
+            enctr_hist.REC_AUTH,
+            enctr_hist.NAME_SPACE_CD,
+            case when coalesce (TERM_ALL.surg_flg,0) > 0 then 'Y' else 'N' end surg_flg ,
+            case when coalesce (TERM_ALL.er_flg,0) > 0 then 'Y' else 'N' end er_flg ,
+
+            CASE
+                WHEN TERM1.term1_cnt > 0 THEN TERM1.v_grp_cd_1
+                WHEN TERM2.term2_cnt > 0 THEN TERM2.v_grp_cd_2
+                WHEN TERM_ALL.term_all_cnt > 0 THEN TERM_ALL.v_grp_cd_all
+            ELSE 'Undefined Others'
+            END v_grp_cd,
+            TERM_ALL.inptn_covid_flg  --- added 5/18/23
+
+            FROM D_ERM_IBV.ENCTR_HIST enctr_hist
+            JOIN me_dt ON (me_dt.new_eff_from_dt BETWEEN enctr_hist.eff_from_dt AND enctr_hist.eff_thru_dt )
+            AND (EXISTS ( SELECT 1
+                          FROM prcs_ctrl
+                          WHERE prcs_ctrl.enctr_id = enctr_hist.enctr_id
+                          AND  prcs_ctrl.name_space_cd = enctr_hist.name_space_cd)
+                 /*OR 'H' = :in_run_type*/)   -- moved to PRCS_CTRL
+            LEFT OUTER JOIN term1    ON (enctr_hist.enctr_id = term1.enctr_id    AND enctr_hist.name_space_cd = term1.name_space_cd    AND term1.eff_from_dt = me_dt.new_eff_from_dt   )
+            LEFT OUTER JOIN term2    ON (enctr_hist.enctr_id = term2.enctr_id    AND enctr_hist.name_space_cd = term2.name_space_cd    AND term2.eff_from_dt = me_dt.new_eff_from_dt   )
+            LEFT OUTER JOIN term_all ON (enctr_hist.enctr_id = term_all.enctr_id AND enctr_hist.name_space_cd = term_all.name_space_cd AND term_all.eff_from_dt = me_dt.new_eff_from_dt)
+            WHERE enctr_hist.name_space_cd = 'EPIC_TC-150'
+        ),
+                	/* 	From Term5 through Term55
+                	 *  PATIENT CLASS TERM = 'N' Will be Patient Class, patient class 1, patient class 2
+                	 *  Patient Class derived from 1(base class) and 2(guarantor type)
+                	 */
+        TERM_ALL AS
+        (
+        SELECT
+            eh.enctr_id,
+            eh.name_space_cd,
+            me_dt.new_eff_from_dt eff_from_dt,
+            COUNT(*) term_all_cnt,
+			sum(CHRG_DTL.SurgeryCharge_cnt) surg_flg,
+	    	sum(CHRG_DTL.EmergencyCharge_cnt) er_flg,
+	    	CASE WHEN (  st.term_cd = 'I' AND ( ( DIAGS.covid_icd_cnt > 0 )  OR  ( DIAGS.final_icd_cnt = 0 AND (CHRG_DTL.covid_hcpcs_cnt > 0 /*OR covid_chrg_cnt >0 */
+                         OR tgpc.tgt_term_cd = 'COVID 19' OR tgsc.tgt_term_cd = 'COVID 19' OR tgtc.tgt_term_cd = 'COVID 19' OR tgfc.tgt_term_cd = 'COVID 19' )) )
+                      ) then 'Y' ELSE 'N' END AS INPTN_COVID_FLG,   -- added 5/18/23
+            CASE
+               WHEN (st.term_cd <> 'I' AND COALESCE(agg.tot_chrg,0) = 0 AND COALESCE(CHRG_DTL2.chrg_qty_cnt,0) = 0 ) THEN 'Outpatient Without Charges'  -- chgd to CHRG_DTL2 5/25/22
+               WHEN (st.term_cd = 'N' OR tt3.tgt_term_cd = 'NONPATIENT' OR tt5.tgt_term_cd = 'NONPATIENT'  OR UPPER (eh.PRMRY_INSRNC_CD) LIKE 'VITA%'
+            OR (tt3.tgt_term_cd = 'SKILLED NURSING' AND eh.name_space_cd = 'HEALTHQUEST MC0CONS' AND eh.DSCHG_DT > DATE'2015-09-30' )
+            OR (strtok(tm3.tgt_term_key,'|',1) = 'HI' AND eh.ORG_LVL_1_CD LIKE '750|%' /*MacNeal Hospice Patients*/ ) ) 					THEN 'Nonpatient Cases'
+
+              --  WHEN (  st.term_cd <> 'I' AND ( ( DIAGS.covid_icd_cnt > 0 )  OR  ( DIAGS.final_icd_cnt = 0 AND (CHRG_DTL.covid_hcpcs_cnt > 0 /*OR covid_chrg_cnt >0 */
+            --OR tgpc.tgt_term_cd = 'COVID 19' OR tgsc.tgt_term_cd = 'COVID 19' OR tgtc.tgt_term_cd = 'COVID 19' OR tgfc.tgt_term_cd = 'COVID 19' )) )
+          --  ) 																																THEN 'Outpatient COVID 19' -- covid 19
+               --TERM-5
+
+                WHEN st.term_cd <> 'I' AND (SurgeryCharge_cnt > 0 AND COALESCE(tt4.tgt_term_cd, ' ') <> 'DELIVERY')									THEN 'Outpatient Surgery' --TERM-12
+
+                WHEN st.term_cd <> 'I' AND (tt3.tgt_term_cd = 'SERIES') 																				THEN 'Outpatient Series' --TERM-24,27
+
+                WHEN st.term_cd <> 'I' AND (EmergencyCharge_cnt > 0 OR tt3.tgt_term_cd = 'EMERGENCY')
+            AND COALESCE(tt3.tgt_term_cd, ' ') <> 'URGENT CARE' 													THEN 'Outpatient Emergency Services' --TERM-17,20
+
+                WHEN st.term_cd <> 'I' 																												THEN 'Outpatient Other' --TERM-28
+
+                WHEN st.term_cd =  'I' AND ((tt3.tgt_term_cd IN ('NEWBORN','INPATIENT ACUTE')
+            AND tt4.tgt_term_cd IN ( 'NORMAL NEWBORN' ) )
+            OR (tt3.tgt_term_cd IN ('NEWBORN')
+            AND tt4.tgt_term_cd IN ( 'UNCODED' ) ) )															THEN 'Inpatient Normal Newborn' --term-29 -- 01/16/2019 Added OR condition
+
+                WHEN (st.term_cd = 'I'  AND COALESCE(agg.tot_chrg,0) = 0 AND COALESCE(CHRG_DTL2.chrg_qty_cnt,0) = 0 AND ed.dschrg_dt_tm IS NOT NULL )	THEN 'Inpatient Without Charges' --New Grouping.
+
+                WHEN st.term_cd =  'I' AND (tt3.tgt_term_cd = 'JOINT VENTURE') 																		THEN 'Inpatient Joint Venture' --Only for Anne Arbor.
+
+                WHEN st.term_cd =  'I' AND (tt3.tgt_term_cd = 'LONG TERM CARE') 																		THEN 'Inpatient Long Term Care' --Only for HQ, Meditech and Meditech Magic.
+
+                WHEN st.term_cd =  'I' AND (tt3.tgt_term_cd = 'RESPITE AND TRANSITION CARE') 															THEN 'Inpatient Respite and Trans' --Only for HQ, Meditech and Meditech Magic.
+
+                WHEN st.term_cd =  'I' AND (tt3.tgt_term_cd = 'BEHAVIORAL HEALTH' OR (tt3.tgt_term_cd = 'INPATIENT ACUTE' AND  BehavRevLoc_cnt > 0 ) )	THEN 'Inpatient Behavioral Medicine' --term-40
+
+                WHEN st.term_cd =  'I' AND (tt3.tgt_term_cd = 'INPATIENT REHAB') 																		THEN 'Inpatient Rehab' --term-44
+
+                WHEN st.term_cd =  'I' AND (tt3.tgt_term_cd = 'SKILLED NURSING') 																		THEN 'Inpatient Skilled Nursing' --term-49
+
+                WHEN st.term_cd =  'I' AND (tt3.tgt_term_cd = 'ACUTE HEAD PAIN') 																		THEN 'Inpatient Acute Head Pain' --Only for HQ, Meditech and Meditech Magic.
+
+                WHEN st.term_cd =  'I' AND (tt3.tgt_term_cd IN ('NEWBORN', 'INPATIENT ACUTE' ) )														THEN 'Inpatient Acute' --term-51
+
+                WHEN st.term_cd =  'I' AND (BehavCharge_cnt > 0) 																						THEN 'Inpatient Behavioral Medicine' --New logic added on 3/1/2019
+
+                WHEN st.term_cd =  'I' AND (RehabCharge_cnt > 0) 																						THEN 'Inpatient Rehab' --New logic added on 3/1/2019
+
+                WHEN st.term_cd =  'I' 																												THEN 'Inpatient Undefined' --term-54
+
+                WHEN st.term_cd <> 'I' 																												THEN 'Outpatient Undefined' 			--term-55
+            ELSE 'Outpatient Undefined'
+            END v_grp_cd_all
+            FROM D_ERM_IBV.ENCTR_HIST eh
+            JOIN me_dt ON(me_dt.new_eff_from_dt BETWEEN eh.eff_from_dt AND eh.eff_thru_dt)
+            LEFT JOIN D_SHR_IBV.term st ON (st.term_key =eH.ptient_clas_cd)
+            LEFT JOIN CHRG_DTL ON (CHRG_DTL.enctr_id = eh.enctr_id AND eh.name_space_cd = CHRG_DTL.name_space_cd AND me_dt.new_eff_from_dt = CHRG_DTL.eff_from_dt )
+            LEFT JOIN CHRG_DTL2 ON ( CHRG_DTL2.enctr_id = eh.enctr_id AND eh.name_space_cd = CHRG_DTL2.name_space_cd AND me_dt.new_eff_from_dt = CHRG_DTL2.eff_from_dt ) -- added 5/25/22
+            LEFT JOIN DIAGS ON ( DIAGS.enctr_id = eh.enctr_id AND DIAGS.name_space_cd = eh.name_space_cd )  -- added 5/25/22
+            LEFT JOIN D_ERM_IBV.ENCTR_AGG agg ON (eh.enctr_id = agg.enctr_id 	AND eh.name_space_cd = agg.name_space_cd AND me_dt.new_eff_from_dt BETWEEN agg.eff_from_dt AND agg.eff_thru_dt)
+            LEFT JOIN D_IDW_IBV.ENCTR_ADMSN ed ON (ed.enctr_id = eh.enctr_id 	AND eh.name_space_cd = ed.name_space_cd)
+                        	/* PATIENT TYPE TERM = EMERGENCY, SERIES */
+            LEFT JOIN D_SHR_IBV.term_map_fltn tm3		ON ( eh.ptient_type_cd = tm3.src_term_key ) -- conformed
+            LEFT JOIN D_SHR_IBV.term_map_grp_fltn tt3	ON ( tm3.tgt_term_key  = tt3.src_term_key	AND tt3.tgt_fmly_name = 'PatientTypeGroup'
+            AND  me_dt.new_eff_from_dt BETWEEN tt3.eff_strt_dt AND tt3.eff_end_dt)
+                        	/* MS DRG = 795 */
+            LEFT JOIN D_SHR_IBV.term_map_fltn tm4		ON ( eh.drg_cd  		= tm4.src_term_key )  -- conformed
+            LEFT JOIN D_SHR_IBV.term_map_grp_fltn tt4	ON ( tm4.tgt_term_key	= tt4.src_term_key	AND tt4.tgt_fmly_name = 'ServiceLineDRG'
+            AND  me_dt.new_eff_from_dt BETWEEN tt4.eff_strt_dt AND tt4.eff_end_dt)
+                        	/* Org Level 3 Code - pavilion for Healthquest name spaces */
+            LEFT JOIN D_SHR_IBV.term_map_grp_fltn tt5	ON ( eh.ORG_LVL_3_CD  = tt5.src_term_key AND tt5.tgt_fmly_name = 'PatientTypeGroup'
+            AND  me_dt.new_eff_from_dt BETWEEN tt5.eff_strt_dt AND tt5.eff_end_dt )
+                            ------ new join for insurance covid start
+                        	/* primary insurance code */
+            LEFT JOIN D_SHR_IBV.term_map_grp_fltn tgpc	ON ( eh.prmry_insrnc_cd = tgpc.src_term_key AND tgpc.tgt_fmly_name = 'ServiceLineDRG'
+            AND  me_dt.new_eff_from_dt BETWEEN tgpc.eff_strt_dt AND tgpc.eff_end_dt )
+                        	/* secondary insurance code */
+            LEFT JOIN D_SHR_IBV.term_map_grp_fltn tgsc	ON ( eh.scndry_insrnc_cd = tgsc.src_term_key AND tgsc.tgt_fmly_name = 'ServiceLineDRG'
+            AND  me_dt.new_eff_from_dt BETWEEN tgsc.eff_strt_dt AND tgsc.eff_end_dt )
+                        	/* third insurance code */
+            LEFT JOIN D_SHR_IBV.term_map_grp_fltn tgtc	ON ( eh.third_insrnc_cd = tgtc.src_term_key AND tgtc.tgt_fmly_name = 'ServiceLineDRG'
+            AND  me_dt.new_eff_from_dt BETWEEN tgtc.eff_strt_dt AND tgtc.eff_end_dt	)
+                        	/* fourth insurance code */
+            LEFT JOIN D_SHR_IBV.term_map_grp_fltn tgfc	ON ( eh.frth_insrnc_cd = tgfc.src_term_key AND tgfc.tgt_fmly_name = 'ServiceLineDRG'
+            AND  me_dt.new_eff_from_dt BETWEEN tgfc.eff_strt_dt AND tgfc.eff_end_dt) ------ new join for insurance covid end
+
+            WHERE eh.name_space_cd = 'EPIC_TC-150'
+                AND  NOT EXISTS (SELECT 1
+                				FROM term1
+                				WHERE term1.enctr_id = eh.enctr_id
+                    			AND  term1.eff_from_dt = me_dt.new_eff_from_dt
+                    			AND  term1.name_space_cd = eh.name_space_cd)
+                				AND  ( EXISTS ( SELECT 1
+                								FROM prcs_ctrl
+                								WHERE prcs_ctrl.enctr_id = eh.enctr_id
+                    							AND  prcs_ctrl.name_space_cd = eh.name_space_cd)
+            							/*OR 'H' = :in_run_type*/)   --moved to PRCS_CTRL
+            GROUP BY eh.enctr_id,
+                eh.name_space_cd,
+                me_dt.new_eff_from_dt,
+                inptn_covid_flg,
+                v_grp_cd_all),
+        CHRG_DTL AS(
+        SELECT
+            dtl.enctr_id,
+            dtl.name_space_cd,
+            me_dt.new_eff_from_dt eff_from_dt,
+             --	sum(dtl.chrg_amt) chrg_dtl_amt,
+            --SUM(dtl.chrg_qty) chrg_qty_cnt,   -- removed 5/25/22
+            SUM(
+            CASE
+                WHEN chrgCdTerm.tgt_term_cd	= 'SURGERY' 	AND chrgDeptTerm.tgt_term_cd = 'SURGERY' 	THEN 1 ELSE 0
+            END) AS SurgeryCharge_cnt,
+                SUM(
+            CASE
+                WHEN chrgCdTerm.tgt_term_cd 	IN('ER VISIT','EMERGENCY') 	OR chrgDeptTerm.tgt_term_cd = 'EMERGENCY' THEN 1 ELSE 0
+            END) AS EmergencyCharge_cnt,
+                SUM(
+            CASE
+                WHEN chrgDeptTerm.tgt_term_cd 	= 'INPATIENT REHAB' 						THEN 1 ELSE 0
+            END) AS RehabCharge_cnt,
+                 -- Only for HQ, Meditech and Meditech Magic.
+            SUM(
+            CASE
+                WHEN chrgDeptTerm.tgt_term_cd 	= 'OUTPATIENT BEHAVIORAL MEDICINE' 			THEN 1 ELSE 0
+            END) AS BehavCharge_cnt,
+                 -- Only for HQ, Meditech and Meditech Magic.
+            SUM(
+            CASE
+                WHEN revLocTerm.tgt_term_cd 	= 'BEHAVIORAL SERVICES - OTHER' 			THEN 1 ELSE 0
+            END) AS BehavRevLoc_cnt,
+                 -- Only for HQ, Meditech and Meditech Magic.
+             --    sum(case when ( tg11.tgt_term_cd = 'COVID 19' or tg1.tgt_term_cd = 'COVID 19' OR chrgCdTerm.tgt_term_cd = 'COVID 19' ) then 1 else 0 end)  covid_cnt
+            SUM(
+            CASE
+                WHEN ( tg11.tgt_term_cd = 'COVID 19') THEN 1 ELSE 0
+            END ) covid_hcpcs_cnt,
+-- removed 5/25/22
+--                 -- jana changing all of them to COVID19 TEST
+--            SUM(
+--            CASE
+--                WHEN ( tg1.tgt_term_cd  = 'COVID 19' ) THEN 1 ELSE 0
+--            END ) covid_icd_cnt,
+                SUM(
+            CASE
+                WHEN ( chrgCdTerm.tgt_term_cd = 'COVID 19' ) THEN 1 ELSE 0
+            END ) covid_chrg_cnt,
+-- removed 5/25/22
+--                SUM(
+--            CASE
+--                WHEN ( x.diagn_cd IS NOT NULL   ) THEN 1 ELSE 0
+--            END ) final_icd_cnt,
+                 -- COVID 19 TEST --
+            SUM(
+            CASE
+                WHEN ( tg11.tgt_term_cd = 'COVID 19 TEST' ) THEN 1 ELSE 0
+            END ) covidtst_hcpcs_cnt
+-- removed 5/25/22
+--                SUM(
+--            CASE
+--                WHEN ( tg1.tgt_term_cd  = 'COVID 19 TEST' ) THEN 1 ELSE 0
+--            END ) covidtst_icd_cnt
+            FROM D_ERM_IBV.ENCTR_HIST eh
+            JOIN me_dt ON (me_dt.new_eff_from_dt BETWEEN eh.eff_from_dt AND eh.eff_thru_dt)
+-- removed 5/25/22
+--            LEFT JOIN
+--            (
+--            SELECT aed.enctr_id,
+--                aed.name_space_cd,
+--                aed.diagn_cd,
+--
+--                CASE
+--                    WHEN ed.dschrg_dt = DATE'1111-11-11' THEN CURRENT_DATE -1 ELSE ed.dschrg_dt
+--                END DSCHRG_DT
+--                FROM D_IDW_IBV.ENCTR_ADMSN ed
+--                JOIN D_IDW_IBV.enctr_diagn aed ON (ed.enctr_id = aed.enctr_id AND aed.name_space_cd = ed.name_space_cd  AND ed.admit_dt >= DATE '2020-02-01')
+--                WHERE ed.name_space_cd = 'EPIC_TC-150'
+--                    AND  aed.DIAGN_SEQ_NUM > 0
+--            ) x ON  (eh.enctr_id = x.enctr_id AND eh.name_space_cd=x.name_space_cd)
+--                            /* COVID 19 diagnosis */
+--            LEFT JOIN D_SHR_IBV.term_map_fltn td		ON ( x.diagn_cd = td.src_term_key )  -- conformed
+--            LEFT JOIN D_SHR_IBV.term_map_grp_fltn tg1	ON ( td.tgt_term_key = tg1.src_term_key AND tg1.tgt_fmly_name = 'ServiceLineDRG'
+--            AND  x.DSCHRG_DT BETWEEN tg1.eff_strt_dt AND tg1.eff_end_dt )
+
+            JOIN D_ERM_IBV.ENCTR_CHRG_DTL dtl	ON ( dtl.enctr_id = eh.enctr_id AND eh.name_space_cd = dtl.name_space_cd AND post_dt <= me_dt.new_eff_from_dt)
+                        	/* Charge Code */
+            LEFT JOIN D_SHR_IBV.term_map_grp_fltn chrgCdTerm	ON ( dtl.item_chrg_cd = chrgCdTerm.src_term_key AND chrgCdTerm.tgt_fmly_name = 'ChargeCdGroup'
+            AND  me_dt.new_eff_from_dt BETWEEN chrgCdTerm.eff_strt_dt AND chrgCdTerm.eff_end_dt )
+                        	/* Charge Revenue Dept */
+            LEFT JOIN D_SHR_IBV.term_map_grp_fltn chrgDeptTerm	ON ( dtl.RVNU_DEPT_CD = chrgDeptTerm.src_term_key AND chrgDeptTerm.tgt_fmly_name = 'ChargeDepartmentGroup'
+            AND  me_dt.new_eff_from_dt BETWEEN chrgDeptTerm.eff_strt_dt AND chrgDeptTerm.eff_end_dt )
+                        	/* Charge Revenue Location */
+            LEFT JOIN D_SHR_IBV.term_map_grp_fltn revLocTerm	ON ( dtl.RVNU_LOC_CD = revLocTerm.src_term_key AND revLocTerm.tgt_fmly_name = 'ChargeDepartmentGroup'
+            AND  me_dt.new_eff_from_dt BETWEEN revLocTerm.eff_strt_dt AND revLocTerm.eff_end_dt )
+                        	/* COVID CPT */
+            LEFT JOIN D_SHR_IBV.term_map_fltn td1		ON ( dtl.cpt_hcpc_std_pcdr_cd = td1.src_term_key )
+            LEFT JOIN D_SHR_IBV.term_map_grp_fltn tg11	ON ( td1.tgt_term_key = tg11.src_term_key AND tg11.tgt_fmly_name = 'ServiceLineDRG'
+            AND  me_dt.new_eff_from_dt BETWEEN tg11.eff_strt_dt AND tg11.eff_end_dt)
+            WHERE eh.name_space_cd = 'EPIC_TC-150'
+              AND ( chrgCdTerm.tgt_term_cd  IN ('SURGERY','ER VISIT','EMERGENCY','COVID 19' )
+                      OR
+                    chrgDeptTerm.tgt_term_cd  IN ('SURGERY','EMERGENCY' ,'INPATIENT REHAB','OUTPATIENT BEHAVIORAL MEDICINE')
+                      OR
+                    revLocTerm.tgt_term_cd 	= 'BEHAVIORAL SERVICES - OTHER'
+                      OR
+                    tg11.tgt_term_cd  IN ('COVID 19','COVID 19 TEST')
+                   )
+                AND  ( EXISTS ( SELECT 1
+                				FROM prcs_ctrl
+                				WHERE prcs_ctrl.enctr_id = eh.enctr_id
+                    			AND  prcs_ctrl.name_space_cd = eh.name_space_cd)
+            		/*OR 'H' = :in_run_type*/)  -- moved to PRCS_CTRL
+            GROUP BY dtl.enctr_id,
+                dtl.name_space_cd,
+                me_dt.new_eff_from_dt
+        ),
+-- added 5/25/22
+        CHRG_DTL2 AS (
+        	SELECT
+            	dtl.enctr_id,
+            	dtl.name_space_cd,
+            	me_dt.new_eff_from_dt eff_from_dt,
+            	SUM(dtl.chrg_qty) chrg_qty_cnt
+            FROM D_ERM_IBV.ENCTR_HIST eh
+            JOIN me_dt ON (me_dt.new_eff_from_dt BETWEEN eh.eff_from_dt AND eh.eff_thru_dt)
+            JOIN D_ERM_IBV.ENCTR_CHRG_DTL dtl	ON ( dtl.enctr_id = eh.enctr_id AND eh.name_space_cd = dtl.name_space_cd AND post_dt <= me_dt.new_eff_from_dt)
+            WHERE eh.name_space_cd = 'EPIC_TC-150'
+               AND  ( EXISTS ( SELECT 1
+                				FROM prcs_ctrl
+                				WHERE prcs_ctrl.enctr_id = eh.enctr_id
+                    			AND  prcs_ctrl.name_space_cd = eh.name_space_cd)
+            		/*OR 'H' = :in_run_type*/)
+            GROUP BY dtl.enctr_id,
+                dtl.name_space_cd,
+                me_dt.new_eff_from_dt
+        ),
+-- added 5/25/22
+        DIAGS as (  /* Need ALL diagnosis codes to determine the final_icd_cnt for non-covid diags */
+            SELECT aed.enctr_id
+                   ,aed.name_space_cd
+                   ,CASE WHEN ed.dschrg_dt = DATE'1111-11-11' THEN CURRENT_DATE -1 ELSE ed.dschrg_dt END 	AS DISCHRG_DT
+                   ,SUM (CASE WHEN ( tg1.tgt_term_cd  = 'COVID 19' ) THEN 1 ELSE 0 END ) 					AS covid_icd_cnt
+                   --,SUM (CASE WHEN ( tg1.tgt_term_cd  = 'COVID 19 TEST' ) THEN 1 ELSE 0 END ) 	AS covidtst_icd_cnt  -- NOT USED ANYMORE
+                   ,SUM (CASE WHEN ( aed.diagn_cd IS NOT NULL and aed.diagn_type_cd NOT LIKE 'W%' ) THEN 1 ELSE 0 END )		AS final_icd_cnt
+              FROM D_IDW_IBV.ENCTR_ADMSN ed
+              JOIN D_IDW_IBV.enctr_diagn aed ON (ed.enctr_id = aed.enctr_id AND aed.name_space_cd = ed.name_space_cd  AND ed.admit_dt >= DATE '2020-02-01' and aed.DIAGN_SEQ_NUM > 0 )
+              LEFT JOIN D_SHR_IBV.term_map_fltn td		ON ( aed.diagn_cd = td.src_term_key )  -- conformed
+              LEFT JOIN D_SHR_IBV.term_map_grp_fltn tg1	ON ( td.tgt_term_key = tg1.src_term_key AND tg1.tgt_fmly_name = 'ServiceLineDRG'
+              											AND  tg1.tgt_term_cd like 'COVID%'
+            											AND  DISCHRG_DT BETWEEN tg1.eff_strt_dt AND tg1.eff_end_dt )
+              WHERE ed.name_space_cd = 'EPIC_TC-150'
+               AND  ( EXISTS ( SELECT 1
+                				FROM prcs_ctrl
+                				WHERE prcs_ctrl.enctr_id = ed.enctr_id
+                    				AND  prcs_ctrl.name_space_cd = ed.name_space_cd)
+                    /*OR 'H' = :in_run_type*/ )
+            GROUP BY aed.enctr_id
+                   ,aed.name_space_cd
+                   ,dschrg_dt
+         ),
+                	/***************************** TERM 1 *******************************/
+        TERM1 AS
+        (
+        SELECT eh.enctr_id,
+            eh.name_space_cd,
+            me_dt.new_eff_from_dt eff_from_dt,
+            COUNT(*) term1_cnt,
+            'Exclude From Reports' v_grp_cd_1
+            FROM D_ERM_IBV.ENCTR_HIST eh
+            JOIN me_dt ON (me_dt.new_eff_from_dt BETWEEN eh.eff_from_dt AND eh.eff_thru_dt)
+            LEFT JOIN D_ERM_IBV.ENCTR_AGG agg 		ON (eh.enctr_id = agg.enctr_id AND eh.name_space_cd = agg.name_space_cd AND  me_dt.new_eff_from_dt BETWEEN agg.eff_from_dt AND agg.eff_thru_dt
+            AND (COALESCE(agg.TOT_AR_BAL,0) + COALESCE(AGG.TOT_OFC_BAL,0)) = 0 )   		--Total Account Balance = 0
+            LEFT JOIN (
+            SELECT *
+                FROM D_IDW_IBV.ENCTR QUALIFY ROW_NUMBER() OVER ( PARTITION BY src_admn_enctr_sk, src_admn_name_space_cd
+                ORDER BY load_mod_dt_tm DESC,
+                    load_add_dt_tm DESC )=1 ) e
+            ON ( e.enctr_id = eh.enctr_id  AND eh.name_space_cd = e.src_admn_name_space_cd )
+            LEFT JOIN D_IDW_IBV.ENCTR_ADMSN ed 	ON (ed.enctr_id = eh.enctr_id AND eh.name_space_cd = ed.name_space_cd)
+            --LEFT JOIN D_IDW_IBV.ENCTR_PRVDR p 		ON p.enctr_id = eh.enctr_id   AND p.name_space_cd = eh.name_space_cd	-- removed 5/25/22 -- not needed
+            --LEFT JOIN D_IDW_IBV.PRTY b ON b.PRTY_ID = p.PRVDR_INDIV_PRTY_ID													-- removed 5/25/22 -- not needed
+            LEFT JOIN D_IDW_IBV.PRTY_INDIV_NAME PIN ON (PIN.INDIV_PRTY_ID = e.PTIENT_MBR_PRTY_ID AND NAME_TYPE_CD='GVN_NM') 	-- this will dup >1 per enctr
+                        	/* Patient Type */
+            LEFT JOIN D_SHR_IBV.term_map_fltn tm3		ON ( eh.ptient_type_cd 	= tm3.src_term_key )  -- conformed
+            LEFT JOIN D_SHR_IBV.term_map_grp_fltn tt3	ON ( tm3.tgt_term_key 	= tt3.src_term_key AND tt3.tgt_fmly_name = 'PatientTypeGroup'
+            AND  me_dt.new_eff_from_dt BETWEEN tt3.eff_strt_dt AND tt3.eff_end_dt)
+            WHERE eh.name_space_cd = 'EPIC_TC-150'
+                AND  ((ed.admit_dt_tm IS NULL AND ed.dschrg_dt_tm IS NULL)
+            OR pin.fmly_name IN ('Test Patient','TEST','Zztest','TESTPRODUCTION','Zztower') --- need this one for EPIC
+            OR pin.fmly_name||pin.gvn_name LIKE '%HNAM%TEST%'  -- need this one for RSW.
+            OR eh.rec_auth  = 69  --Our Lady of Peace (IN212) is REC_AUTH=69
+            OR tt3.tgt_term_cd = 'EXCLUDE FROM REPORTS'
+            OR ed.actv_ind='N'   -- Epic TC sets the indicator based on PATIENT_3.IS_TEST_PAT_YN
+                        ----	 	or tt5.term_cd = 'EXCLUDE FROM REPORTS'
+            OR (eh.EXTR_AR_FLG='Y' AND eh.name_space_cd NOT IN ('EPIC-CHICAGO','EPIC-CHICAGO-PB'))
+            )
+                AND  (EXISTS ( SELECT 1
+                			   FROM prcs_ctrl
+                	 		   WHERE prcs_ctrl.enctr_id = eh.enctr_id
+                               AND  prcs_ctrl.name_space_cd = eh.name_space_cd)
+                      /*OR 'H' = :in_run_type*/)  -- moved to PRCS_CTRL
+            GROUP BY eh.enctr_id,
+                eh.name_space_cd,
+                me_dt.new_eff_from_dt),
+                	/***************************** TERM 2 *******************************/
+        TERM2 AS  -- LEGACY CONVERSION LOGIC
+        (
+        SELECT eh.enctr_id,
+            eh.name_space_cd,
+            me_dt.new_eff_from_dt eff_from_dt,
+            COUNT(*) term2_cnt,
+            'LEGACY CONVERSION' v_grp_cd_2
+            FROM D_ERM_IBV.ENCTR_HIST eh
+            JOIN me_dt ON (me_dt.new_eff_from_dt BETWEEN eh.eff_from_dt AND eh.eff_thru_dt)
+            LEFT JOIN D_IDW_IBV.ENCTR_ADMSN ed 	ON (ed.enctr_id = eh.enctr_id AND eh.name_space_cd = ed.name_space_cd)
+            LEFT JOIN D_ERM_IBV.enctr_tsactn_dtl td ON (eh.name_space_cd=td.name_space_cd AND eh.enctr_id=td.enctr_id)
+            LEFT JOIN D_SHR_IBV.term_map_grp grp 	ON (td.item_tsactn_cd = grp.src_term_key )
+            WHERE eh.name_space_cd = 'EPIC_TC-150' --AND st3.term_cd = 'I'  -- 2/6/2020 commented
+                 --and loc.TGT_TERM_KEY='30|NRC|UB04-DischargeLocation' -- 2/6/2020 commented
+                 --and -- 2/6/2020 commented
+
+                AND  grp.tgt_term_key ='LEGACY CONVERSION|GRP|SubCategory'
+                AND  (EXISTS ( SELECT 1
+                			  	FROM prcs_ctrl
+                				WHERE prcs_ctrl.enctr_id = eh.enctr_id
+                    			AND  prcs_ctrl.name_space_cd = eh.name_space_cd)
+            		  /* OR 'H' = :in_run_type*/ ) -- moved to PRCS_CTRL
+            GROUP BY eh.enctr_id,
+                eh.name_space_cd,
+                me_dt.new_eff_from_dt),
+        prcs_ctrl AS (
+        SELECT prcs_ctrl.enctr_id,
+            prcs_ctrl.name_space_cd
+            FROM D_ERM_IBV.enctr_prcs_cntrl prcs_ctrl
+            WHERE prcs_ctrl.NAME_SPACE_CD = 'EPIC_TC-150'
+                AND (  (prcs_ctrl.std_grpg_rsult_dt IS NULL OR prcs_ctrl.std_grpg_rsult_dt < prcs_ctrl.std_grpg_extc_dt)
+                   OR  ('I' in ('H','S') AND coalesce(prcs_ctrl.std_grpg_rsult_dt, date'2041-01-01') >= current_date -1)  )  -- new History and Start Date logic
+                	),
+        me_dt AS (
+        SELECT  calendar_date new_eff_from_dt
+            FROM D_SHR_ACCV.PERIOD_CALENDAR x
+            WHERE ( x.calendar_date = last_day(x.calendar_date) OR x.calendar_date = CURRENT_DATE -1 )
+                AND  (
+            ('H' = 'I' AND x.calendar_date BETWEEN /*l_hist_run_dt*/ current_date -1 AND CURRENT_DATE -1 )
+            OR ('I' IN ('I','S') AND x.calendar_date <= CURRENT_DATE AND x.calendar_date  >= current_date -1 )
+            )
+        )
+        SELECT ENCTR_ID,
+            eff_from_dt,
+            REC_AUTH,
+            NAME_SPACE_CD,SURG_FLG, ER_FLG,
+            --:l_job_id AS JOB_ID,
+            CURRENT_DATE AS LOAD_ADD_DT_TM,
+            CURRENT_DATE AS LOAD_MOD_DT_TM,
+            '2041-01-01' EFF_THRU_DT,
+            COALESCE(v_grp_cd, 'Undefined Main') STD_PTIENT_CLAS,
+            COALESCE(inptn_covid_flg,'N') INPTN_COVID_FLG
+            FROM MAIN
+            WHERE ENCTR_ID > 0
+            GROUP BY ENCTR_ID,
+                eff_from_dt,
+                REC_AUTH,
+                NAME_SPACE_CD,SURG_FLG, ER_FLG,
+                
+                LOAD_ADD_DT_TM,
+                LOAD_MOD_DT_TM,
+                EFF_THRU_DT,
+                STD_PTIENT_CLAS,
+                COALESCE(inptn_covid_flg,'N');
+
+ Explanation                                                               
+ ------------------------------------------------------------------------- 
+  This request is eligible for incremental planning and execution (IPE).  
+  The following is the static plan for the request.                       
+   1) First, we lock D_ERM_INT.ENCTR_TSACTN_DTL in TD_MAP1 for access,    
+      we lock D_ERM_INT.ENCTR_CHRG_DTL in TD_MAP1 for access, we lock     
+      D_ERM_INT.ENCTR_AGG in TD_MAP1 for access on a single partition,    
+      we lock D_ERM_INT.ENCTR_HIST in TD_MAP1 for access on a single      
+      partition, we lock D_ERM_INT.ENCTR_PRCS_CNTRL in TD_MAP1 for        
+      access on a single partition, we lock D_ERM_INT.ENCTR_PRCS_CNTRL    
+      in TD_MAP1 for access on a single partition, we lock                
+      D_IDW_INT.PRTY_INDIV_NAME in TD_MAP1 for access, we lock            
+      D_IDW_INT.ENCTR_ADMSN in TD_MAP1 for access on a single partition,  
+      we lock D_IDW_INT.ENCTR in TD_MAP1 for access on a single           
+      partition, we lock D_IDW_INT.ENCTR_DIAGN in TD_MAP1 for access on   
+      a single partition, we lock D_SHR_INT.TERM_MAP_GRP_FLTN in TD_MAP1  
+      for access, we lock D_SHR_INT.TERM_MAP_FLTN in TD_MAP1 for access,  
+      we lock D_SHR_INT.TERM in TD_MAP1 for access, and we lock           
+      D_SHR_INT.TERM_MAP_GRP in TD_MAP1 for access.                       
+   2) Next, we do a single-AMP RETRIEVE step from SYS_CALENDAR.CALDATES   
+      by way of the unique primary index "SYS_CALENDAR.CALDATES.cdate =   
+      DATE '2025-08-18'" with a residual condition of (                   
+      "((SYS_CALENDAR.CALDATES.cdate = (TD_SYSFNLIB.last_day (            
+      SYS_CALENDAR.CALDATES.cdate ))) OR (SYS_CALENDAR.CALDATES.cdate =   
+      DATE '2025-08-18')) AND ((SYS_CALENDAR.CALDATES.cdate =             
+      (TD_SYSFNLIB.last_day (SYS_CALENDAR.CALDATES.cdate ))) OR           
+      (SYS_CALENDAR.CALDATES.cdate = DATE '2025-08-18'))") locking row    
+      for access into Spool 1 (used to materialize view, derived table,   
+      table function or table operator x) (group_amps), which is          
+      redistributed by hash code to all AMPs in TD_Map1.  The size of     
+      Spool 1 is estimated with low confidence to be 1 row (302 bytes).   
+      The estimated time for this step is 0.00 seconds.                   
+   3) We do a single-AMP RETRIEVE step from SYS_CALENDAR.CALDATES by way  
+      of the unique primary index "SYS_CALENDAR.CALDATES.cdate = DATE     
+      '2025-08-19'" with a residual condition of (                        
+      "((SYS_CALENDAR.CALDATES.cdate = (TD_SYSFNLIB.last_day (            
+      SYS_CALENDAR.CALDATES.cdate ))) OR (SYS_CALENDAR.CALDATES.cdate =   
+      DATE '2025-08-18')) AND ((SYS_CALENDAR.CALDATES.cdate =             
+      (TD_SYSFNLIB.last_day (SYS_CALENDAR.CALDATES.cdate ))) OR           
+      (SYS_CALENDAR.CALDATES.cdate = DATE '2025-08-18'))") locking row    
+      for access into Spool 1 (used to materialize view, derived table,   
+      table function or table operator x) (group_amps), which is          
+      redistributed by hash code to all AMPs in TD_Map1.  Then we do a    
+      SORT to order Spool 1 by the sort key in spool field1 eliminating   
+      duplicate rows.  The size of Spool 1 is estimated with no           
+      confidence to be 2 rows (604 bytes).  The estimated time for this   
+      step is 0.00 seconds.                                               
+   4) We execute the following steps in parallel.                         
+        1) We do a group-AMP RETRIEVE step in TD_Map1 from Spool 1 (Last  
+           Use) by way of an all-rows scan with a condition of (          
+           "((x.CALENDAR_DATE >= DATE '2025-08-18') AND (x.CALENDAR_DATE  
+           <= DATE '2025-08-19')) AND ((x.CALENDAR_DATE = DATE            
+           '2025-08-18') OR (x.CALENDAR_DATE = (TD_SYSFNLIB.last_day (    
+           x.CALENDAR_DATE ))))") into Spool 23 (used to materialize      
+           view, derived table, table function or table operator me_dt)   
+           (all_amps), which is built locally on that AMP.  The size of   
+           Spool 23 is estimated with no confidence to be 2 rows (50      
+           bytes).  The estimated time for this step is 0.01 seconds.     
+        2) We do an all-AMPs RETRIEVE step in TD_MAP1 from a single       
+           partition of D_IDW_INT.ENCTR with a condition of (             
+           "D_IDW_INT.ENCTR.SRC_ADMN_NAME_SPACE_CD = 'EPIC_TC-150'")      
+           with a residual condition of (                                 
+           "D_IDW_INT.ENCTR.SRC_ADMN_NAME_SPACE_CD = 'EPIC_TC-150'")      
+           into Spool 36 (all_amps), which is built locally on the AMPs.  
+           The size of Spool 36 is estimated with high confidence to be   
+           271,090 rows (190,847,360 bytes).  The estimated time for      
+           this step is 0.02 seconds.                                     
+   5) We do an all-AMPs STAT FUNCTION step in TD_Map1 from Spool 36       
+      (Last Use) by way of an all-rows scan into Spool 46 (Last Use),     
+      which is redistributed by hash code to all AMPs in TD_Map1.  The    
+      result rows are put into Spool 44 (all_amps), which is built        
+      locally on the AMPs.  The size is estimated with high confidence    
+      to be 271,090 rows (226,089,060 bytes).                             
+   6) We execute the following steps in parallel.                         
+        1) We do an all-AMPs RETRIEVE step in TD_Map1 from Spool 44       
+           (Last Use) by way of an all-rows scan with a condition of (    
+           "Field_36 = 1") into Spool 3 (used to materialize view,        
+           derived table, table function or table operator e) (all_amps), 
+           which is built locally on the AMPs.  The size of Spool 3 is    
+           estimated with low confidence to be 267,400 rows (             
+           189,853,752 bytes).  The estimated time for this step is 0.03  
+           seconds.                                                       
+        2) We do an all-AMPs RETRIEVE step in TD_MAP1 from                
+           D_SHR_INT.TERM_MAP_FLTN by way of an all-rows scan with no     
+           residual conditions into Spool 49 (all_amps), which is built   
+           locally on the AMPs.  The size of Spool 49 is estimated with   
+           high confidence to be 1,382,672 rows (258,559,664 bytes).      
+           The estimated time for this step is 0.14 seconds.              
+        3) We do an all-AMPs JOIN step in TD_MAP1 from a single           
+           partition of D_ERM_INT.ENCTR_HIST with a condition of (        
+           "D_ERM_INT.ENCTR_HIST.NAME_SPACE_CD = 'EPIC_TC-150'") with a   
+           residual condition of ("(D_ERM_INT.ENCTR_HIST.NAME_SPACE_CD =  
+           'EPIC_TC-150') AND (D_ERM_INT.ENCTR_HIST.ENCTR_ID >= 1)"),     
+           which is joined to a single partition of                       
+           D_ERM_INT.ENCTR_PRCS_CNTRL with a condition of (               
+           "((D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_RSULT_DT IS NULL) OR    
+           (D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_RSULT_DT <                
+           D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_EXTC_DT )) AND             
+           ((D_ERM_INT.ENCTR_PRCS_CNTRL.NAME_SPACE_CD = 'EPIC_TC-150')    
+           AND (D_ERM_INT.ENCTR_PRCS_CNTRL.ENCTR_ID >= 1 ))").            
+           D_ERM_INT.ENCTR_HIST and D_ERM_INT.ENCTR_PRCS_CNTRL are        
+           joined using a rowkey-based inclusion merge join, with a join  
+           condition of ("(D_ERM_INT.ENCTR_HIST.ENCTR_ID >= 1) AND        
+           ((D_ERM_INT.ENCTR_PRCS_CNTRL.ENCTR_ID =                        
+           D_ERM_INT.ENCTR_HIST.ENCTR_ID) AND                             
+           ((D_ERM_INT.ENCTR_PRCS_CNTRL.NAME_SPACE_CD =                   
+           D_ERM_INT.ENCTR_HIST.NAME_SPACE_CD) AND                        
+           (D_ERM_INT.ENCTR_HIST.NAME_SPACE_CD = 'EPIC_TC-150')))").      
+           The input table D_ERM_INT.ENCTR_HIST will not be cached in     
+           memory.  The result goes into Spool 50 (all_amps), which is    
+           redistributed by hash code to all AMPs in TD_Map1.  The size   
+           of Spool 50 is estimated with no confidence to be 43,225 rows  
+           (5,965,050 bytes).  The estimated time for this step is 0.44   
+           seconds.                                                       
+   7) We do an all-AMPs JOIN step in TD_Map1 from Spool 49 by way of an   
+      all-rows scan, which is joined to Spool 50 (Last Use) by way of an  
+      all-rows scan.  Spool 49 and Spool 50 are right outer joined using  
+      a single partition hash join, with a join condition of (            
+      "PTIENT_TYPE_CD = SRC_TERM_KEY").  The result goes into Spool 52    
+      (all_amps), which is redistributed by hash code to all AMPs in      
+      TD_Map1.  Then we do a SORT to order Spool 52 by row hash.  The     
+      size of Spool 52 is estimated with no confidence to be 43,225 rows  
+      (5,965,050 bytes).  The estimated time for this step is 0.04        
+      seconds.                                                            
+   8) We do an all-AMPs RETRIEVE step in TD_MAP1 from a single partition  
+      of D_IDW_INT.ENCTR_ADMSN with a condition of (                      
+      "D_IDW_INT.ENCTR_ADMSN.NAME_SPACE_CD = 'EPIC_TC-150'") with a       
+      residual condition of ("(D_IDW_INT.ENCTR_ADMSN.NAME_SPACE_CD =      
+      'EPIC_TC-150') AND (D_IDW_INT.ENCTR_ADMSN.ENCTR_ID >= 1)") into     
+      Spool 54 (all_amps), which is redistributed by hash code to all     
+      AMPs in TD_Map1.  Then we do a SORT to order Spool 54 by row hash.  
+      The size of Spool 54 is estimated with low confidence to be         
+      248,631 rows (15,166,491 bytes).  The estimated time for this step  
+      is 0.07 seconds.                                                    
+   9) We execute the following steps in parallel.                         
+        1) We do an all-AMPs JOIN step in TD_Map1 from Spool 52 (Last     
+           Use) by way of a RowHash match scan, which is joined to Spool  
+           54 (Last Use) by way of a RowHash match scan.  Spool 52 and    
+           Spool 54 are left outer joined using a merge join, with a      
+           join condition of ("(NAME_SPACE_CD = NAME_SPACE_CD) AND        
+           (ENCTR_ID = ENCTR_ID)").  The result goes into Spool 55        
+           (all_amps), which is built locally on the AMPs.  Then we do a  
+           SORT to order Spool 55 by row hash.  The size of Spool 55 is   
+           estimated with no confidence to be 43,225 rows (6,916,000      
+           bytes).  The estimated time for this step is 0.01 seconds.     
+        2) We do an all-AMPs RETRIEVE step in TD_Map1 from Spool 3 by     
+           way of an all-rows scan with a condition of (                  
+           "(e.SRC_ADMN_NAME_SPACE_CD = 'EPIC_TC-150') AND (e.ENCTR_ID    
+           >= 1)") into Spool 58 (all_amps), which is redistributed by    
+           hash code to all AMPs in TD_Map1.  Then we do a SORT to order  
+           Spool 58 by row hash.  The size of Spool 58 is estimated with  
+           low confidence to be 267,400 rows (12,567,784 bytes).  The     
+           estimated time for this step is 0.06 seconds.                  
+  10) We execute the following steps in parallel.                         
+       1) We do an all-AMPs JOIN step in TD_Map1 from Spool 55 (Last      
+          Use) by way of a RowHash match scan, which is joined to Spool   
+          58 (Last Use) by way of a RowHash match scan.  Spool 55 and     
+          Spool 58 are left outer joined using a merge join, with a join  
+          condition of ("(NAME_SPACE_CD = SRC_ADMN_NAME_SPACE_CD) AND     
+          (ENCTR_ID = ENCTR_ID)").  The result goes into Spool 59         
+          (all_amps), which is redistributed by hash code to all AMPs in  
+          TD_Map1.  Then we do a SORT to order Spool 59 by row hash.      
+          The size of Spool 59 is estimated with no confidence to be      
+          85,273 rows (14,325,864 bytes).  The estimated time for this    
+          step is 0.04 seconds.                                           
+       2) We do an all-AMPs RETRIEVE step in TD_Map1 from Spool 23 by     
+          way of an all-rows scan into Spool 60 (all_amps), which is      
+          duplicated on all AMPs in TD_Map1.  The size of Spool 60 is     
+          estimated with no confidence to be 880 rows (14,960 bytes).     
+          The estimated time for this step is 0.01 seconds.               
+  11) We do an all-AMPs JOIN step in TD_Map1 from Spool 59 (Last Use) by  
+      way of a RowHash match scan, which is joined to                     
+      D_IDW_INT.PRTY_INDIV_NAME by way of a RowHash match scan with a     
+      condition of ("D_IDW_INT.PRTY_INDIV_NAME.NAME_TYPE_CD = 'GVN_NM'"). 
+      Spool 59 and D_IDW_INT.PRTY_INDIV_NAME are left outer joined using  
+      a merge join, with condition(s) used for non-matching on left       
+      table ("NOT (PTIENT_MBR_PRTY_ID IS NULL)"), with a join condition   
+      of ("D_IDW_INT.PRTY_INDIV_NAME.INDIV_PRTY_ID = PTIENT_MBR_PRTY_ID").
+      The result goes into Spool 61 (all_amps), which is built locally    
+      on the AMPs.  The size of Spool 61 is estimated with no confidence  
+      to be 85,279 rows (19,614,170 bytes).  The estimated time for this  
+      step is 0.73 seconds.                                               
+  12) We do an all-AMPs JOIN step in TD_Map1 from Spool 60 by way of an   
+      all-rows scan, which is joined to Spool 61 (Last Use) by way of an  
+      all-rows scan.  Spool 60 and Spool 61 are joined using a product    
+      join, with a join condition of ("(NEW_EFF_FROM_DT >= EFF_FROM_DT)   
+      AND (NEW_EFF_FROM_DT <= EFF_THRU_DT)").  The result goes into       
+      Spool 62 (all_amps), which is redistributed by rowkey to all AMPs   
+      in TD_Map1.  Then we do a SORT to partition Spool 62 by rowkey.     
+      The size of Spool 62 is estimated with no confidence to be 120,603  
+      rows (27,256,278 bytes).  The estimated time for this step is 0.05  
+      seconds.                                                            
+  13) We execute the following steps in parallel.                         
+       1) We do an all-AMPs JOIN step in TD_Map1 from Spool 62 (Last      
+          Use) by way of a RowHash match scan, which is joined to a       
+          single partition of D_ERM_INT.ENCTR_AGG with a condition of (   
+          "D_ERM_INT.ENCTR_AGG.NAME_SPACE_CD = 'EPIC_TC-150'") with a     
+          residual condition of ("(((( CASE WHEN (NOT                     
+          (D_ERM_INT.ENCTR_AGG.TOT_AR_BAL IS NULL )) THEN                 
+          (D_ERM_INT.ENCTR_AGG.TOT_AR_BAL) ELSE (0.00) END ))+ (( CASE    
+          WHEN (NOT (D_ERM_INT.ENCTR_AGG.TOT_OFC_BAL IS NULL )) THEN      
+          (D_ERM_INT.ENCTR_AGG.TOT_OFC_BAL) ELSE (0.00) END )))= 0.00)    
+          AND ((D_ERM_INT.ENCTR_AGG.NAME_SPACE_CD = 'EPIC_TC-150') AND    
+          (D_ERM_INT.ENCTR_AGG.ENCTR_ID >= 1 ))").  Spool 62 and          
+          D_ERM_INT.ENCTR_AGG are left outer joined using a rowkey-based  
+          merge join, with a join condition of ("(NAME_SPACE_CD =         
+          D_ERM_INT.ENCTR_AGG.NAME_SPACE_CD) AND ((ENCTR_ID =             
+          D_ERM_INT.ENCTR_AGG.ENCTR_ID) AND ((NEW_EFF_FROM_DT <=          
+          D_ERM_INT.ENCTR_AGG.EFF_THRU_DT) AND (NEW_EFF_FROM_DT >=        
+          D_ERM_INT.ENCTR_AGG.EFF_FROM_DT )))").  The input table         
+          D_ERM_INT.ENCTR_AGG will not be cached in memory.  The result   
+          goes into Spool 63 (all_amps), which is built locally on the    
+          AMPs.  The size of Spool 63 is estimated with no confidence to  
+          be 263,938 rows (59,649,988 bytes).  The estimated time for     
+          this step is 0.04 seconds.                                      
+       2) We do an all-AMPs RETRIEVE step in TD_MAP1 from                 
+          D_SHR_INT.TERM_MAP_GRP_FLTN by way of an all-rows scan with a   
+          condition of ("D_SHR_INT.TERM_MAP_GRP_FLTN.TGT_FMLY_NAME =      
+          'PatientTypeGroup'") into Spool 66 (all_amps), which is         
+          duplicated on all AMPs in TD_Map1.  The size of Spool 66 is     
+          estimated with high confidence to be 11,137,280 rows (          
+          1,781,964,800 bytes).  The estimated time for this step is      
+          18.59 seconds.                                                  
+  14) We do an all-AMPs JOIN step in TD_Map1 from Spool 63 (Last Use) by  
+      way of an all-rows scan, which is joined to Spool 66 by way of an   
+      all-rows scan.  Spool 63 and Spool 66 are left outer joined using   
+      a single partition hash join, with condition(s) used for            
+      non-matching on left table ("NOT (TGT_TERM_KEY IS NULL)"), with a   
+      join condition of ("(TGT_TERM_KEY = SRC_TERM_KEY) AND               
+      ((NEW_EFF_FROM_DT <= EFF_END_DT) AND (NEW_EFF_FROM_DT >=            
+      EFF_STRT_DT ))"), and with a post join condition of (               
+      "(((((((DSCHRG_DT_TM IS NULL) AND (ADMIT_DT_TM IS NULL )) OR        
+      (EXTR_AR_FLG = 'Y')) OR (REC_AUTH = 69 )) OR (ACTV_IND = 'N')) OR   
+      (FMLY_NAME ||GVN_NAME LIKE '%HNAM%TEST%')) OR (FMLY_NAME IN         
+      ('TEST',
+'Test Patient','TESTPRODUCTION','Zztest','Zztower'))) OR   
+      (TGT_TERM_CD = 'EXCLUDE FROM REPORTS')").  The result goes into     
+      Spool 67 (all_amps), which is built locally on the AMPs.  The size  
+      of Spool 67 is estimated with no confidence to be 264,053 rows (    
+      50,434,123 bytes).  The estimated time for this step is 0.11        
+      seconds.                                                            
+  15) We do an all-AMPs RETRIEVE step in TD_Map1 from Spool 67 (Last      
+      Use) by way of an all-rows scan into Spool 35 (all_amps), which is  
+      built locally on the AMPs.  The size of Spool 35 is estimated with  
+      no confidence to be 264,053 rows (11,882,385 bytes).  The           
+      estimated time for this step is 0.01 seconds.                       
+  16) We do an all-AMPs SUM step in TD_Map1 to aggregate from Spool 35    
+      (Last Use) by way of an all-rows scan, and the grouping identifier  
+      in field 1.  Aggregate intermediate results are computed globally,  
+      then placed in Spool 69 in TD_Map1.  The size of Spool 69 is        
+      estimated with no confidence to be 85,199 rows (9,627,487 bytes).   
+      The estimated time for this step is 0.08 seconds.                   
+  17) We execute the following steps in parallel.                         
+       1) We do an all-AMPs RETRIEVE step in TD_Map1 from Spool 69 (Last  
+          Use) by way of an all-rows scan into Spool 22 (used to          
+          materialize view, derived table, table function or table        
+          operator TERM1) (all_amps), which is built locally on the AMPs. 
+          The size of Spool 22 is estimated with no confidence to be      
+          85,199 rows (5,963,930 bytes).  The estimated time for this     
+          step is 0.01 seconds.                                           
+       2) We do an all-AMPs RETRIEVE step in TD_Map1 from Spool 23 (Last  
+          Use) by way of an all-rows scan with a condition of ("NOT       
+          (me_dt.NEW_EFF_FROM_DT IS NULL)") into Spool 71 (all_amps),     
+          which is duplicated on all AMPs in TD_Map1.  The size of Spool  
+          71 is estimated with no confidence to be 880 rows (14,960       
+          bytes).  The estimated time for this step is 0.01 seconds.      
+  18) We execute the following steps in parallel.                         
+       1) We do an all-AMPs JOIN step in TD_Map1 from Spool 71 by way of  
+          an all-rows scan, which is joined to a single partition of      
+          D_ERM_INT.ENCTR_HIST with a condition of (                      
+          "D_ERM_INT.ENCTR_HIST.NAME_SPACE_CD = 'EPIC_TC-150'") with a    
+          residual condition of ("(D_ERM_INT.ENCTR_HIST.NAME_SPACE_CD =   
+          'EPIC_TC-150') AND (D_ERM_INT.ENCTR_HIST.ENCTR_ID >= 1)")       
+          locking D_ERM_INT.ENCTR_HIST for access.  Spool 71 and          
+          D_ERM_INT.ENCTR_HIST are joined using a product join, with a    
+          join condition of ("(NEW_EFF_FROM_DT <=                         
+          D_ERM_INT.ENCTR_HIST.EFF_THRU_DT) AND (NEW_EFF_FROM_DT >=       
+          D_ERM_INT.ENCTR_HIST.EFF_FROM_DT)").  The input table           
+          D_ERM_INT.ENCTR_HIST will not be cached in memory, but it is    
+          eligible for synchronized scanning.  The result goes into       
+          Spool 72 (all_amps), which is built locally on the AMPs.  Then  
+          we do a SORT to order Spool 72 by row hash.  The size of Spool  
+          72 is estimated with no confidence to be 527,405 rows (         
+          22,678,415 bytes).  The estimated time for this step is 0.06    
+          seconds.                                                        
+       2) We do an all-AMPs RETRIEVE step in TD_MAP1 from a single        
+          partition of D_IDW_INT.ENCTR_ADMSN with a condition of (        
+          "D_IDW_INT.ENCTR_ADMSN.NAME_SPACE_CD = 'EPIC_TC-150'") with a   
+          residual condition of ("(D_IDW_INT.ENCTR_ADMSN.NAME_SPACE_CD =  
+          'EPIC_TC-150') AND (D_IDW_INT.ENCTR_ADMSN.ENCTR_ID >= 1)")      
+          locking for access into Spool 73 (all_amps), which is           
+          redistributed by hash code to all AMPs in TD_Map1.  Then we do  
+          a SORT to order Spool 73 by row hash.  The size of Spool 73 is  
+          estimated with low confidence to be 248,631 rows (12,182,919    
+          bytes).  The estimated time for this step is 0.07 seconds.      
+  19) We execute the following steps in parallel.                         
+       1) We do an all-AMPs JOIN step in TD_Map1 from Spool 72 by way of  
+          a RowHash match scan, which is joined to Spool 73 by way of a   
+          RowHash match scan.  Spool 72 and Spool 73 are left outer       
+          joined using a merge join, with a join condition of (           
+          "(NAME_SPACE_CD = NAME_SPACE_CD) AND (ENCTR_ID = ENCTR_ID)").   
+          The result goes into Spool 74 (all_amps), which is built        
+          locally on the AMPs.  Then we do a SORT to order Spool 74 by    
+          row hash.  The size of Spool 74 is estimated with no            
+          confidence to be 527,406 rows (22,678,458 bytes).  The          
+          estimated time for this step is 0.01 seconds.                   
+       2) We do an all-AMPs RETRIEVE step in TD_MAP1 from                 
+          D_SHR_INT.TERM_MAP_GRP by way of an all-rows scan with a        
+          condition of ("D_SHR_INT.TERM_MAP_GRP.TGT_TERM_KEY = 'LEGACY    
+          CONVERSION|GRP|SubCategory'") into Spool 77 (all_amps), which   
+          is duplicated on all AMPs in TD_Map1.  Then we do a SORT to     
+          order Spool 77 by row hash.  The size of Spool 77 is estimated  
+          with high confidence to be 4,400 rows (440,000 bytes).  The     
+          estimated time for this step is 0.31 seconds.                   
+  20) We do an all-AMPs JOIN step in TD_MAP1 from                         
+      D_ERM_INT.ENCTR_TSACTN_DTL by way of a RowHash match scan with a    
+      condition of ("(D_ERM_INT.ENCTR_TSACTN_DTL.NAME_SPACE_CD =          
+      'EPIC_TC-150') AND (D_ERM_INT.ENCTR_TSACTN_DTL.ENCTR_ID >= 1)"),    
+      which is joined to Spool 74 (Last Use) by way of a RowHash match    
+      scan.  D_ERM_INT.ENCTR_TSACTN_DTL and Spool 74 are joined using a   
+      sliding-window merge join, with a join condition of (               
+      "(NAME_SPACE_CD = D_ERM_INT.ENCTR_TSACTN_DTL.NAME_SPACE_CD) AND     
+      (ENCTR_ID = D_ERM_INT.ENCTR_TSACTN_DTL.ENCTR_ID)").  The input      
+      table D_ERM_INT.ENCTR_TSACTN_DTL will not be cached in memory, but  
+      it is eligible for synchronized scanning.  The result goes into     
+      Spool 78 (all_amps), which is built locally on the AMPs.  Then we   
+      do a SORT to order Spool 78 by row hash.  The size of Spool 78 is   
+      estimated with no confidence to be 134,611 rows (17,499,430 bytes). 
+      The estimated time for this step is 53.29 seconds.                  
+  21) We do an all-AMPs JOIN step in TD_Map1 from Spool 77 (Last Use) by  
+      way of a RowHash match scan, which is joined to Spool 78 (Last      
+      Use) by way of a RowHash match scan.  Spool 77 and Spool 78 are     
+      joined using a merge join, with a join condition of (               
+      "ITEM_TSACTN_CD = SRC_TERM_KEY").  The result goes into Spool 79    
+      (all_amps), which is built locally on the AMPs.  Then we do a SORT  
+      to partition Spool 79 by rowkey.  The size of Spool 79 is           
+      estimated with no confidence to be 543 rows (23,349 bytes).  The    
+      estimated time for this step is 0.01 seconds.                       
+  22) We do an all-AMPs JOIN step in TD_Map1 from Spool 79 (Last Use) by  
+      way of an all-rows scan, which is joined to a single partition of   
+      D_ERM_INT.ENCTR_PRCS_CNTRL with a condition of (                    
+      "D_ERM_INT.ENCTR_PRCS_CNTRL.NAME_SPACE_CD = 'EPIC_TC-150'") with a  
+      residual condition of (                                             
+      "((D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_RSULT_DT IS NULL) OR         
+      (D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_RSULT_DT <                     
+      D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_EXTC_DT )) AND                  
+      ((D_ERM_INT.ENCTR_PRCS_CNTRL.NAME_SPACE_CD = 'EPIC_TC-150') AND     
+      (D_ERM_INT.ENCTR_PRCS_CNTRL.ENCTR_ID >= 1 ))").  Spool 79 and       
+      D_ERM_INT.ENCTR_PRCS_CNTRL are joined using a rowkey-based          
+      inclusion merge join, with a join condition of (                    
+      "(D_ERM_INT.ENCTR_PRCS_CNTRL.NAME_SPACE_CD = NAME_SPACE_CD) AND     
+      ((D_ERM_INT.ENCTR_PRCS_CNTRL.ENCTR_ID = ENCTR_ID) AND ((ENCTR_ID    
+      >= 1) AND (NAME_SPACE_CD = 'EPIC_TC-150')))").  The result goes     
+      into Spool 37 (all_amps), which is built locally on the AMPs.  The  
+      size of Spool 37 is estimated with no confidence to be 137 rows (   
+      6,165 bytes).  The estimated time for this step is 0.00 seconds.    
+  23) We do an all-AMPs SUM step in TD_Map1 to aggregate from Spool 37    
+      (Last Use) by way of an all-rows scan, and the grouping identifier  
+      in field 1.  Aggregate intermediate results are computed locally,   
+      then placed in Spool 82 in TD_Map1.  The size of Spool 82 is        
+      estimated with no confidence to be 137 rows (15,481 bytes).  The    
+      estimated time for this step is 0.01 seconds.                       
+  24) We execute the following steps in parallel.                         
+       1) We do an all-AMPs RETRIEVE step in TD_Map1 from Spool 82 (Last  
+          Use) by way of an all-rows scan into Spool 21 (used to          
+          materialize view, derived table, table function or table        
+          operator TERM2) (all_amps), which is built locally on the AMPs. 
+          The size of Spool 21 is estimated with no confidence to be 137  
+          rows (9,316 bytes).  The estimated time for this step is 0.01   
+          seconds.                                                        
+       2) We do an all-AMPs JOIN step in TD_MAP1 from                     
+          D_ERM_INT.ENCTR_CHRG_DTL by way of a RowHash match scan with a  
+          condition of ("(D_ERM_INT.ENCTR_CHRG_DTL.NAME_SPACE_CD =        
+          'EPIC_TC-150') AND (D_ERM_INT.ENCTR_CHRG_DTL.ENCTR_ID >= 1)"),  
+          which is joined to Spool 72 by way of a RowHash match scan.     
+          D_ERM_INT.ENCTR_CHRG_DTL and Spool 72 are joined using a        
+          sliding-window merge join, with a join condition of (           
+          "(NAME_SPACE_CD = D_ERM_INT.ENCTR_CHRG_DTL.NAME_SPACE_CD) AND   
+          ((D_ERM_INT.ENCTR_CHRG_DTL.ENCTR_ID = ENCTR_ID) AND             
+          (D_ERM_INT.ENCTR_CHRG_DTL.POST_DT <= NEW_EFF_FROM_DT ))").      
+          The input table D_ERM_INT.ENCTR_CHRG_DTL will not be cached in  
+          memory, but it is eligible for synchronized scanning.  The      
+          result goes into Spool 86 (all_amps), which is built locally    
+          on the AMPs.  Then we do a SORT to partition Spool 86 by        
+          rowkey.  The size of Spool 86 is estimated with no confidence   
+          to be 144,586 rows (60,292,362 bytes).  The estimated time for  
+          this step is 54.78 seconds.                                     
+  25) We execute the following steps in parallel.                         
+       1) We do an all-AMPs JOIN step in TD_Map1 from Spool 86 (Last      
+          Use) by way of an all-rows scan, which is joined to a single    
+          partition of D_ERM_INT.ENCTR_PRCS_CNTRL with a condition of (   
+          "D_ERM_INT.ENCTR_PRCS_CNTRL.NAME_SPACE_CD = 'EPIC_TC-150'")     
+          with a residual condition of (                                  
+          "((D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_RSULT_DT IS NULL) OR     
+          (D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_RSULT_DT <                 
+          D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_EXTC_DT )) AND              
+          (D_ERM_INT.ENCTR_PRCS_CNTRL.NAME_SPACE_CD = 'EPIC_TC-150')")    
+          locking D_ERM_INT.ENCTR_PRCS_CNTRL for access.  Spool 86 and    
+          D_ERM_INT.ENCTR_PRCS_CNTRL are joined using a rowkey-based      
+          inclusion merge join, with a join condition of (                
+          "(NAME_SPACE_CD = 'EPIC_TC-150') AND                            
+          ((D_ERM_INT.ENCTR_PRCS_CNTRL.ENCTR_ID = ENCTR_ID) AND           
+          (D_ERM_INT.ENCTR_PRCS_CNTRL.NAME_SPACE_CD = NAME_SPACE_CD ))"). 
+          The result goes into Spool 87 (all_amps), which is built        
+          locally on the AMPs.  The size of Spool 87 is estimated with    
+          no confidence to be 144,586 rows (56,533,126 bytes).  The       
+          estimated time for this step is 0.01 seconds.                   
+       2) We do an all-AMPs RETRIEVE step in TD_MAP1 from                 
+          D_SHR_INT.TERM_MAP_GRP_FLTN by way of an all-rows scan with a   
+          condition of ("D_SHR_INT.TERM_MAP_GRP_FLTN.TGT_FMLY_NAME =      
+          'ChargeDepartmentGroup'") locking for access into Spool 89      
+          (all_amps), which is duplicated on all AMPs in TD_Map1.  The    
+          size of Spool 89 is estimated with high confidence to be        
+          14,229,600 rows (2,276,736,000 bytes).  The estimated time for  
+          this step is 18.65 seconds.                                     
+  26) We do an all-AMPs JOIN step in TD_Map1 from Spool 87 (Last Use) by  
+      way of an all-rows scan, which is joined to Spool 89 by way of an   
+      all-rows scan.  Spool 87 and Spool 89 are left outer joined using   
+      a single partition hash join, with a join condition of (            
+      "(RVNU_DEPT_CD = SRC_TERM_KEY) AND ((NEW_EFF_FROM_DT >=             
+      EFF_STRT_DT) AND (NEW_EFF_FROM_DT <= EFF_END_DT ))").  The result   
+      goes into Spool 90 (all_amps), which is built locally on the AMPs.  
+      The size of Spool 90 is estimated with no confidence to be 144,649  
+      rows (51,495,044 bytes).  The estimated time for this step is 0.14  
+      seconds.                                                            
+  27) We do an all-AMPs RETRIEVE step in TD_MAP1 from                     
+      D_SHR_INT.TERM_MAP_GRP_FLTN by way of an all-rows scan with a       
+      condition of ("D_SHR_INT.TERM_MAP_GRP_FLTN.TGT_FMLY_NAME =          
+      'ChargeCdGroup'") locking for access into Spool 92 (all_amps),      
+      which is redistributed by hash code to all AMPs in TD_Map1.  The    
+      size of Spool 92 is estimated with high confidence to be 2,159,141  
+      rows (345,462,560 bytes).  The estimated time for this step is      
+      18.53 seconds.                                                      
+  28) We do an all-AMPs JOIN step in TD_Map1 from Spool 90 (Last Use) by  
+      way of an all-rows scan, which is joined to Spool 89 (Last Use) by  
+      way of an all-rows scan.  Spool 90 and Spool 89 are left outer      
+      joined using a single partition hash join, with condition(s) used   
+      for non-matching on left table ("NOT (RVNU_LOC_CD IS NULL)"), with  
+      a join condition of ("(RVNU_LOC_CD = SRC_TERM_KEY) AND              
+      ((NEW_EFF_FROM_DT >= EFF_STRT_DT) AND (NEW_EFF_FROM_DT <=           
+      EFF_END_DT ))").  The result goes into Spool 93 (all_amps), which   
+      is redistributed by hash code to all AMPs in TD_Map1.  The size of  
+      Spool 93 is estimated with no confidence to be 144,712 rows (       
+      46,452,552 bytes).  The estimated time for this step is 0.48        
+      seconds.                                                            
+  29) We do an all-AMPs JOIN step in TD_Map1 from Spool 92 (Last Use) by  
+      way of an all-rows scan, which is joined to Spool 93 (Last Use) by  
+      way of an all-rows scan.  Spool 92 and Spool 93 are right outer     
+      joined using a single partition hash join, with a join condition    
+      of ("(ITEM_CHRG_CD = SRC_TERM_KEY) AND ((NEW_EFF_FROM_DT >=         
+      EFF_STRT_DT) AND (NEW_EFF_FROM_DT <= EFF_END_DT ))").  The result   
+      goes into Spool 95 (all_amps), which is redistributed by hash code  
+      to all AMPs in TD_Map1.  The size of Spool 95 is estimated with no  
+      confidence to be 144,779 rows (41,406,794 bytes).  The estimated    
+      time for this step is 0.63 seconds.                                 
+  30) We do an all-AMPs RETRIEVE step in TD_MAP1 from                     
+      D_SHR_INT.TERM_MAP_GRP_FLTN by way of an all-rows scan with a       
+      condition of ("D_SHR_INT.TERM_MAP_GRP_FLTN.TGT_FMLY_NAME =          
+      'ServiceLineDRG'") locking for access into Spool 98 (all_amps),     
+      which is redistributed by hash code to all AMPs in TD_Map1.  The    
+      size of Spool 98 is estimated with high confidence to be 2,690,222  
+      rows (430,435,520 bytes).  The estimated time for this step is      
+      18.55 seconds.                                                      
+  31) We do an all-AMPs JOIN step in TD_Map1 from Spool 49 by way of an   
+      all-rows scan, which is joined to Spool 95 (Last Use) by way of an  
+      all-rows scan.  Spool 49 and Spool 95 are right outer joined using  
+      a single partition hash join, with condition(s) used for            
+      non-matching on right table ("NOT (CPT_HCPC_STD_PCDR_CD IS NULL)"), 
+      with a join condition of ("CPT_HCPC_STD_PCDR_CD = SRC_TERM_KEY").   
+      The result goes into Spool 99 (all_amps), which is redistributed    
+      by hash code to all AMPs in TD_Map1.  The size of Spool 99 is       
+      estimated with no confidence to be 144,779 rows (41,406,794 bytes). 
+      The estimated time for this step is 4.04 seconds.                   
+  32) We do an all-AMPs JOIN step in TD_Map1 from Spool 98 by way of an   
+      all-rows scan, which is joined to Spool 99 (Last Use) by way of an  
+      all-rows scan.  Spool 98 and Spool 99 are right outer joined using  
+      a single partition hash join, with condition(s) used for            
+      non-matching on right table ("NOT (TGT_TERM_KEY IS NULL)"), with a  
+      join condition of ("(TGT_TERM_KEY = SRC_TERM_KEY) AND               
+      ((NEW_EFF_FROM_DT >= EFF_STRT_DT) AND (NEW_EFF_FROM_DT <=           
+      EFF_END_DT ))"), and with a post join condition of (                
+      "(((TGT_TERM_CD IN ('COVID 19','EMERGENCY','ER VISIT','SURGERY'))   
+      OR (TGT_TERM_CD IN ('EMERGENCY',
+'INPATIENT REHAB','OUTPATIENT      
+      BEHAVIORAL MEDICINE','SURGERY'))) OR (TGT_TERM_CD = 'BEHAVIORAL     
+      SERVICES - OTHER')) OR (TGT_TERM_CD IN ('COVID 19',
+'COVID 19       
+      TEST'))").  The result goes into Spool 39 (all_amps), which is      
+      built locally on the AMPs.  The size of Spool 39 is estimated with  
+      no confidence to be 144,846 rows (36,646,038 bytes).  The           
+      estimated time for this step is 0.06 seconds.                       
+  33) We do an all-AMPs SUM step in TD_Map1 to aggregate from Spool 39    
+      (Last Use) by way of an all-rows scan, and the grouping identifier  
+      in field 1.  Aggregate intermediate results are computed globally,  
+      then placed in Spool 106 in TD_Map1.  The size of Spool 106 is      
+      estimated with no confidence to be 144,586 rows (17,205,734 bytes). 
+      The estimated time for this step is 0.06 seconds.                   
+  34) We execute the following steps in parallel.                         
+       1) We do an all-AMPs RETRIEVE step in TD_Map1 from Spool 106       
+          (Last Use) by way of an all-rows scan into Spool 14 (used to    
+          materialize view, derived table, table function or table        
+          operator CHRG_DTL) (all_amps), which is built locally on the    
+          AMPs.  The size of Spool 14 is estimated with no confidence to  
+          be 144,586 rows (10,843,950 bytes).  The estimated time for     
+          this step is 0.01 seconds.                                      
+       2) We do an all-AMPs JOIN step in TD_MAP1 from                     
+          D_ERM_INT.ENCTR_CHRG_DTL by way of a RowHash match scan with a  
+          condition of ("(D_ERM_INT.ENCTR_CHRG_DTL.NAME_SPACE_CD =        
+          'EPIC_TC-150') AND (D_ERM_INT.ENCTR_CHRG_DTL.ENCTR_ID >= 1)"),  
+          which is joined to Spool 72 (Last Use) by way of a RowHash      
+          match scan locking D_ERM_INT.ENCTR_CHRG_DTL for access.         
+          D_ERM_INT.ENCTR_CHRG_DTL and Spool 72 are joined using a        
+          sliding-window merge join, with a join condition of (           
+          "(D_ERM_INT.ENCTR_CHRG_DTL.POST_DT <= NEW_EFF_FROM_DT) AND      
+          ((NAME_SPACE_CD = D_ERM_INT.ENCTR_CHRG_DTL.NAME_SPACE_CD) AND   
+          (D_ERM_INT.ENCTR_CHRG_DTL.ENCTR_ID = ENCTR_ID ))").  The input  
+          table D_ERM_INT.ENCTR_CHRG_DTL will not be cached in memory,    
+          but it is eligible for synchronized scanning.  The result goes  
+          into Spool 110 (all_amps), which is built locally on the AMPs.  
+          Then we do a SORT to partition Spool 110 by rowkey.  The size   
+          of Spool 110 is estimated with no confidence to be 144,586      
+          rows (12,289,810 bytes).  The estimated time for this step is   
+          54.77 seconds.                                                  
+  35) We do an all-AMPs JOIN step in TD_Map1 from Spool 110 (Last Use)    
+      by way of an all-rows scan, which is joined to a single partition   
+      of D_ERM_INT.ENCTR_PRCS_CNTRL with a condition of (                 
+      "D_ERM_INT.ENCTR_PRCS_CNTRL.NAME_SPACE_CD = 'EPIC_TC-150'") with a  
+      residual condition of (                                             
+      "((D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_RSULT_DT IS NULL) OR         
+      (D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_RSULT_DT <                     
+      D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_EXTC_DT )) AND                  
+      ((D_ERM_INT.ENCTR_PRCS_CNTRL.NAME_SPACE_CD = 'EPIC_TC-150') AND     
+      (D_ERM_INT.ENCTR_PRCS_CNTRL.ENCTR_ID >= 1 ))") locking              
+      D_ERM_INT.ENCTR_PRCS_CNTRL for access.  Spool 110 and               
+      D_ERM_INT.ENCTR_PRCS_CNTRL are joined using a rowkey-based          
+      inclusion merge join, with a join condition of ("(NAME_SPACE_CD =   
+      'EPIC_TC-150') AND ((ENCTR_ID >= 1) AND                             
+      ((D_ERM_INT.ENCTR_PRCS_CNTRL.ENCTR_ID = ENCTR_ID) AND               
+      (D_ERM_INT.ENCTR_PRCS_CNTRL.NAME_SPACE_CD = NAME_SPACE_CD )))").    
+      The result goes into Spool 40 (all_amps), which is built locally    
+      on the AMPs.  The size of Spool 40 is estimated with no confidence  
+      to be 36,221 rows (2,209,481 bytes).  The estimated time for this   
+      step is 0.00 seconds.                                               
+  36) We do an all-AMPs SUM step in TD_Map1 to aggregate from Spool 40    
+      (Last Use) by way of an all-rows scan, and the grouping identifier  
+      in field 1.  Aggregate intermediate results are computed globally,  
+      then placed in Spool 113 in TD_Map1.  The size of Spool 113 is      
+      estimated with no confidence to be 36,221 rows (4,672,509 bytes).   
+      The estimated time for this step is 0.02 seconds.                   
+  37) We execute the following steps in parallel.                         
+       1) We do an all-AMPs RETRIEVE step in TD_Map1 from Spool 113       
+          (Last Use) by way of an all-rows scan into Spool 13 (used to    
+          materialize view, derived table, table function or table        
+          operator CHRG_DTL2) (all_amps), which is built locally on the   
+          AMPs.  The size of Spool 13 is estimated with no confidence to  
+          be 36,221 rows (2,426,807 bytes).  The estimated time for this  
+          step is 0.01 seconds.                                           
+       2) We do an all-AMPs RETRIEVE step in TD_MAP1 from a single        
+          partition of D_IDW_INT.ENCTR_ADMSN with a condition of (        
+          "D_IDW_INT.ENCTR_ADMSN.NAME_SPACE_CD = 'EPIC_TC-150'") with a   
+          residual condition of ("(D_IDW_INT.ENCTR_ADMSN.ADMIT_DT >=      
+          DATE '2020-02-01') AND ((D_IDW_INT.ENCTR_ADMSN.NAME_SPACE_CD =  
+          'EPIC_TC-150') AND (D_IDW_INT.ENCTR_ADMSN.ENCTR_ID >= 1 ))")    
+          locking for access into Spool 115 (all_amps), which is          
+          redistributed by rowkey to all AMPs in TD_Map1.  Then we do a   
+          SORT to partition Spool 115 by rowkey.  The size of Spool 115   
+          is estimated with low confidence to be 186,474 rows (           
+          8,018,382 bytes).  The estimated time for this step is 0.07     
+          seconds.                                                        
+  38) We execute the following steps in parallel.                         
+       1) We do an all-AMPs JOIN step in TD_Map1 from Spool 115 (Last     
+          Use) by way of an all-rows scan, which is joined to a single    
+          partition of D_ERM_INT.ENCTR_PRCS_CNTRL with a condition of (   
+          "D_ERM_INT.ENCTR_PRCS_CNTRL.NAME_SPACE_CD = 'EPIC_TC-150'")     
+          with a residual condition of (                                  
+          "((D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_RSULT_DT IS NULL) OR     
+          (D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_RSULT_DT <                 
+          D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_EXTC_DT )) AND              
+          (D_ERM_INT.ENCTR_PRCS_CNTRL.NAME_SPACE_CD = 'EPIC_TC-150')")    
+          locking D_ERM_INT.ENCTR_PRCS_CNTRL for access.  Spool 115 and   
+          D_ERM_INT.ENCTR_PRCS_CNTRL are joined using a rowkey-based      
+          inclusion merge join, with a join condition of (                
+          "(NAME_SPACE_CD = 'EPIC_TC-150') AND                            
+          ((D_ERM_INT.ENCTR_PRCS_CNTRL.ENCTR_ID = ENCTR_ID) AND           
+          (D_ERM_INT.ENCTR_PRCS_CNTRL.NAME_SPACE_CD = NAME_SPACE_CD ))"). 
+          The result goes into Spool 116 (all_amps), which is             
+          redistributed by hash code to all AMPs in TD_Map1.  The size    
+          of Spool 116 is estimated with no confidence to be 43,144 rows  
+          (1,855,192 bytes).  The estimated time for this step is 0.02    
+          seconds.                                                        
+       2) We do an all-AMPs RETRIEVE step in TD_MAP1 from a single        
+          partition of D_IDW_INT.ENCTR_DIAGN with a condition of (        
+          "D_IDW_INT.ENCTR_DIAGN.NAME_SPACE_CD = 'EPIC_TC-150'") with a   
+          residual condition of ("(D_IDW_INT.ENCTR_DIAGN.DIAGN_SEQ_NUM    
+          >= 1) AND ((D_IDW_INT.ENCTR_DIAGN.NAME_SPACE_CD =               
+          'EPIC_TC-150') AND (D_IDW_INT.ENCTR_DIAGN.ENCTR_ID >= 1 ))")    
+          into Spool 118 (all_amps), which is redistributed by hash code  
+          to all AMPs in TD_Map1.  The size of Spool 118 is estimated     
+          with low confidence to be 595,369 rows (126,813,597 bytes).     
+          The estimated time for this step is 0.11 seconds.               
+  39) We do an all-AMPs JOIN step in TD_Map1 from Spool 116 (Last Use)    
+      by way of an all-rows scan, which is joined to Spool 118 (Last      
+      Use) by way of an all-rows scan.  Spool 116 and Spool 118 are       
+      joined using a single partition hash join, with a join condition    
+      of ("(ENCTR_ID = ENCTR_ID) AND (NAME_SPACE_CD = NAME_SPACE_CD)").   
+      The result goes into Spool 119 (all_amps), which is redistributed   
+      by hash code to all AMPs in TD_Map1.  Then we do a SORT to order    
+      Spool 119 by row hash.  The size of Spool 119 is estimated with no  
+      confidence to be 10,856 rows (2,355,752 bytes).  The estimated      
+      time for this step is 0.06 seconds.                                 
+  40) We execute the following steps in parallel.                         
+       1) We do an all-AMPs RETRIEVE step in TD_MAP1 from                 
+          D_SHR_INT.TERM_MAP_GRP_FLTN by way of an all-rows scan with a   
+          condition of ("(D_SHR_INT.TERM_MAP_GRP_FLTN.TGT_TERM_CD LIKE    
+          'COVID%') AND (D_SHR_INT.TERM_MAP_GRP_FLTN.TGT_FMLY_NAME =      
+          'ServiceLineDRG')") locking for access into Spool 120           
+          (all_amps), which is redistributed by hash code to all AMPs in  
+          TD_Map1.  Then we do a SORT to order Spool 120 by row hash.     
+          The size of Spool 120 is estimated with low confidence to be    
+          119 rows (19,040 bytes).  The estimated time for this step is   
+          18.36 seconds.                                                  
+       2) We do an all-AMPs JOIN step in TD_MAP1 from                     
+          D_SHR_INT.TERM_MAP_FLTN by way of a RowHash match scan with no  
+          residual conditions, which is joined to Spool 119 (Last Use)    
+          by way of a RowHash match scan locking D_SHR_INT.TERM_MAP_FLTN  
+          for access.  D_SHR_INT.TERM_MAP_FLTN and Spool 119 are          
+          right outer joined using a merge join, with a join condition    
+          of ("DIAGN_CD = D_SHR_INT.TERM_MAP_FLTN.SRC_TERM_KEY").  The    
+          result goes into Spool 121 (all_amps), which is redistributed   
+          by hash code to all AMPs in TD_Map1.  Then we do a SORT to      
+          order Spool 121 by row hash.  The size of Spool 121 is          
+          estimated with no confidence to be 10,856 rows (3,300,224       
+          bytes).  The estimated time for this step is 0.03 seconds.      
+  41) We do an all-AMPs JOIN step in TD_Map1 from Spool 120 (Last Use)    
+      by way of a RowHash match scan, which is joined to Spool 121 (Last  
+      Use) by way of a RowHash match scan.  Spool 120 and Spool 121 are   
+      right outer joined using a merge join, with condition(s) used for   
+      non-matching on right table ("NOT (TGT_TERM_KEY IS NULL)"), with a  
+      join condition of ("(TGT_TERM_KEY = SRC_TERM_KEY) AND (((( CASE     
+      WHEN (DSCHRG_DT = DATE '1111-11-11') THEN ((DATE '2025-08-19')- 1)  
+      ELSE (DSCHRG_DT) END ))>= EFF_STRT_DT) AND ((( CASE WHEN            
+      (DSCHRG_DT = DATE '1111-11-11') THEN ((DATE '2025-08-19')- 1) ELSE  
+      (DSCHRG_DT) END ))<= EFF_END_DT ))").  The result goes into Spool   
+      41 (all_amps), which is built locally on the AMPs.  The size of     
+      Spool 41 is estimated with no confidence to be 10,864 rows (        
+      2,944,144 bytes).  The estimated time for this step is 0.01         
+      seconds.                                                            
+  42) We do an all-AMPs SUM step in TD_Map1 to aggregate from Spool 41    
+      (Last Use) by way of an all-rows scan, and the grouping identifier  
+      in field 1.  Aggregate intermediate results are computed globally,  
+      then placed in Spool 127 in TD_Map1.  The size of Spool 127 is      
+      estimated with no confidence to be 10,856 rows (1,205,016 bytes).   
+      The estimated time for this step is 0.02 seconds.                   
+  43) We execute the following steps in parallel.                         
+       1) We do an all-AMPs RETRIEVE step in TD_Map1 from Spool 127       
+          (Last Use) by way of an all-rows scan into Spool 12 (used to    
+          materialize view, derived table, table function or table        
+          operator DIAGS) (all_amps), which is built locally on the AMPs. 
+          The size of Spool 12 is estimated with no confidence to be      
+          10,856 rows (597,080 bytes).  The estimated time for this step  
+          is 0.01 seconds.                                                
+       2) We do an all-AMPs RETRIEVE step in TD_MAP1 from a single        
+          partition of D_IDW_INT.ENCTR_ADMSN with a condition of (        
+          "D_IDW_INT.ENCTR_ADMSN.NAME_SPACE_CD = 'EPIC_TC-150'") with a   
+          residual condition of ("D_IDW_INT.ENCTR_ADMSN.NAME_SPACE_CD =   
+          'EPIC_TC-150'") locking for access into Spool 129 (all_amps),   
+          which is redistributed by hash code to all AMPs in TD_Map1.     
+          Then we do a SORT to order Spool 129 by row hash.  The size of  
+          Spool 129 is estimated with high confidence to be 248,631 rows  
+          (15,166,491 bytes).  The estimated time for this step is 0.07   
+          seconds.                                                        
+       3) We do an all-AMPs JOIN step in TD_MAP1 from a single partition  
+          of D_ERM_INT.ENCTR_HIST with a condition of (                   
+          "D_ERM_INT.ENCTR_HIST.NAME_SPACE_CD = 'EPIC_TC-150'") with a    
+          residual condition of ("D_ERM_INT.ENCTR_HIST.NAME_SPACE_CD =    
+          'EPIC_TC-150'"), which is joined to a single partition of       
+          D_ERM_INT.ENCTR_PRCS_CNTRL with a condition of (                
+          "((D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_RSULT_DT IS NULL) OR     
+          (D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_RSULT_DT <                 
+          D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_EXTC_DT )) AND              
+          (D_ERM_INT.ENCTR_PRCS_CNTRL.NAME_SPACE_CD = 'EPIC_TC-150')")    
+          locking D_ERM_INT.ENCTR_HIST for access and                     
+          D_ERM_INT.ENCTR_PRCS_CNTRL for access.  D_ERM_INT.ENCTR_HIST    
+          and D_ERM_INT.ENCTR_PRCS_CNTRL are joined using a rowkey-based  
+          inclusion merge join, with a join condition of (                
+          "(D_ERM_INT.ENCTR_PRCS_CNTRL.NAME_SPACE_CD =                    
+          D_ERM_INT.ENCTR_HIST.NAME_SPACE_CD) AND                         
+          ((D_ERM_INT.ENCTR_PRCS_CNTRL.ENCTR_ID =                         
+          D_ERM_INT.ENCTR_HIST.ENCTR_ID) AND                              
+          (D_ERM_INT.ENCTR_HIST.NAME_SPACE_CD = 'EPIC_TC-150'))").  The   
+          input table D_ERM_INT.ENCTR_HIST will not be cached in memory.  
+          The result goes into Spool 130 (all_amps), which is built       
+          locally on the AMPs.  Then we do a SORT to order Spool 130 by   
+          row hash.  The size of Spool 130 is estimated with no           
+          confidence to be 375,478 rows (51,815,964 bytes).  The          
+          estimated time for this step is 0.06 seconds.                   
+  44) We do an all-AMPs JOIN step in TD_Map1 from Spool 129 (Last Use)    
+      by way of a RowHash match scan, which is joined to Spool 130 (Last  
+      Use) by way of a RowHash match scan.  Spool 129 and Spool 130 are   
+      right outer joined using a merge join, with a join condition of (   
+      "(ENCTR_ID = ENCTR_ID) AND (NAME_SPACE_CD = NAME_SPACE_CD)").  The  
+      result goes into Spool 133 (all_amps), which is redistributed by    
+      hash code to all AMPs in TD_Map1.  The size of Spool 133 is         
+      estimated with no confidence to be 375,478 rows (60,076,480 bytes). 
+      The estimated time for this step is 3.32 seconds.                   
+  45) We do an all-AMPs JOIN step in TD_Map1 from Spool 49 by way of an   
+      all-rows scan, which is joined to Spool 133 (Last Use) by way of    
+      an all-rows scan.  Spool 49 and Spool 133 are right outer joined    
+      using a single partition hash join, with a join condition of (      
+      "PTIENT_TYPE_CD = SRC_TERM_KEY").  The result goes into Spool 137   
+      (all_amps), which is built locally on the AMPs.  The size of Spool  
+      137 is estimated with no confidence to be 375,478 rows (            
+      60,076,480 bytes).  The estimated time for this step is 0.07        
+      seconds.                                                            
+  46) We execute the following steps in parallel.                         
+       1) We do an all-AMPs JOIN step in TD_Map1 from Spool 60 by way of  
+          an all-rows scan, which is joined to Spool 137 (Last Use) by    
+          way of an all-rows scan.  Spool 60 and Spool 137 are joined     
+          using a product join, with a join condition of (                
+          "(NEW_EFF_FROM_DT <= EFF_THRU_DT) AND (NEW_EFF_FROM_DT >=       
+          EFF_FROM_DT)").  The result goes into Spool 140 (all_amps),     
+          which is redistributed by hash code to all AMPs in TD_Map1.     
+          The size of Spool 140 is estimated with no confidence to be     
+          531,007 rows (82,837,092 bytes).  The estimated time for this   
+          step is 0.09 seconds.                                           
+       2) We do an all-AMPs RETRIEVE step in TD_Map1 from Spool 3 (Last   
+          Use) by way of an all-rows scan with a condition of (           
+          "e.SRC_ADMN_NAME_SPACE_CD = 'EPIC_TC-150'") into Spool 141      
+          (all_amps), which is redistributed by hash code to all AMPs in  
+          TD_Map1.  Then we do a SORT to order Spool 141 by row hash.     
+          The size of Spool 141 is estimated with low confidence to be    
+          267,400 rows (12,567,784 bytes).  The estimated time for this   
+          step is 0.07 seconds.                                           
+  47) We do an all-AMPs JOIN step in TD_MAP1 from                         
+      D_IDW_INT.PRTY_INDIV_NAME by way of a RowHash match scan with a     
+      condition of ("D_IDW_INT.PRTY_INDIV_NAME.NAME_TYPE_CD = 'GVN_NM'"), 
+      which is joined to Spool 141 (Last Use) by way of a RowHash match   
+      scan locking D_IDW_INT.PRTY_INDIV_NAME for access.                  
+      D_IDW_INT.PRTY_INDIV_NAME and Spool 141 are right outer joined      
+      using a merge join, with condition(s) used for non-matching on      
+      right table ("NOT (PTIENT_MBR_PRTY_ID IS NULL)"), with a join       
+      condition of ("D_IDW_INT.PRTY_INDIV_NAME.INDIV_PRTY_ID =            
+      PTIENT_MBR_PRTY_ID").  The result goes into Spool 142 (all_amps),   
+      which is redistributed by hash code to all AMPs in TD_Map1.  The    
+      size of Spool 142 is estimated with low confidence to be 267,416    
+      rows (29,148,344 bytes).  The estimated time for this step is 1.03  
+      seconds.                                                            
+  48) We do an all-AMPs JOIN step in TD_Map1 from Spool 140 (Last Use)    
+      by way of a RowHash match scan, which is joined to a single         
+      partition of D_ERM_INT.ENCTR_AGG with a condition of (              
+      "D_ERM_INT.ENCTR_AGG.NAME_SPACE_CD = 'EPIC_TC-150'") with a         
+      residual condition of ("(((( CASE WHEN (NOT                         
+      (D_ERM_INT.ENCTR_AGG.TOT_AR_BAL IS NULL )) THEN                     
+      (D_ERM_INT.ENCTR_AGG.TOT_AR_BAL) ELSE (0.00) END ))+ (( CASE WHEN   
+      (NOT (D_ERM_INT.ENCTR_AGG.TOT_OFC_BAL IS NULL )) THEN               
+      (D_ERM_INT.ENCTR_AGG.TOT_OFC_BAL) ELSE (0.00) END )))= 0.00) AND    
+      (D_ERM_INT.ENCTR_AGG.NAME_SPACE_CD = 'EPIC_TC-150')") locking       
+      D_ERM_INT.ENCTR_AGG for access.  Spool 140 and D_ERM_INT.ENCTR_AGG  
+      are left outer joined using a single partition hash join, with a    
+      join condition of ("(ENCTR_ID = D_ERM_INT.ENCTR_AGG.ENCTR_ID) AND   
+      ((NAME_SPACE_CD = D_ERM_INT.ENCTR_AGG.NAME_SPACE_CD) AND            
+      ((NEW_EFF_FROM_DT >= D_ERM_INT.ENCTR_AGG.EFF_FROM_DT) AND           
+      (NEW_EFF_FROM_DT <= D_ERM_INT.ENCTR_AGG.EFF_THRU_DT )))").  The     
+      input table D_ERM_INT.ENCTR_AGG will not be cached in memory.  The  
+      result goes into Spool 145 (all_amps), which is built locally on    
+      the AMPs.  The size of Spool 145 is estimated with no confidence    
+      to be 954,978 rows (148,976,568 bytes).  The estimated time for     
+      this step is 0.05 seconds.                                          
+  49) We do an all-AMPs JOIN step in TD_Map1 from Spool 142 (Last Use)    
+      by way of an all-rows scan, which is joined to Spool 145 (Last      
+      Use) by way of an all-rows scan.  Spool 142 and Spool 145 are       
+      right outer joined using a single partition hash join, with a join  
+      condition of ("(ENCTR_ID = ENCTR_ID) AND (NAME_SPACE_CD =           
+      SRC_ADMN_NAME_SPACE_CD)").  The result goes into Spool 146          
+      (all_amps) fanned out into 2 hash join partitions, which is built   
+      locally on the AMPs.  The size of Spool 146 is estimated with no    
+      confidence to be 1,848,310 rows (417,718,060 bytes).  The           
+      estimated time for this step is 0.05 seconds.                       
+  50) We do an all-AMPs RETRIEVE step in TD_MAP1 from                     
+      D_SHR_INT.TERM_MAP_GRP_FLTN by way of an all-rows scan with a       
+      condition of ("D_SHR_INT.TERM_MAP_GRP_FLTN.TGT_FMLY_NAME =          
+      'PatientTypeGroup'") locking for access into Spool 149 (all_amps)   
+      fanned out into 2 hash join partitions, which is duplicated on all  
+      AMPs in TD_Map1.  The size of Spool 149 is estimated with high      
+      confidence to be 11,137,280 rows (1,781,964,800 bytes).  The        
+      estimated time for this step is 18.59 seconds.                      
+  51) We do an all-AMPs JOIN step in TD_Map1 from Spool 146 (Last Use)    
+      by way of an all-rows scan, which is joined to Spool 149 (Last      
+      Use) by way of an all-rows scan.  Spool 146 and Spool 149 are       
+      left outer joined using a hash join of 2 partitions, with           
+      condition(s) used for non-matching on left table ("NOT              
+      (TGT_TERM_KEY IS NULL)"), with a join condition of (                
+      "(TGT_TERM_KEY = SRC_TERM_KEY) AND ((NEW_EFF_FROM_DT >=             
+      EFF_STRT_DT) AND (NEW_EFF_FROM_DT <= EFF_END_DT ))"), and with a    
+      post join condition of ("(((((((DSCHRG_DT_TM IS NULL) AND           
+      (ADMIT_DT_TM IS NULL )) OR (EXTR_AR_FLG = 'Y')) OR (REC_AUTH = 69   
+      )) OR (ACTV_IND = 'N')) OR (FMLY_NAME ||GVN_NAME LIKE               
+      '%HNAM%TEST%')) OR (FMLY_NAME IN ('TEST',
+'Test                     
+      Patient','TESTPRODUCTION','Zztest','Zztower'))) OR (TGT_TERM_CD =   
+      'EXCLUDE FROM REPORTS')").  The result goes into Spool 150          
+      (all_amps), which is built locally on the AMPs.  The size of Spool  
+      150 is estimated with no confidence to be 1,849,114 rows (          
+      353,180,774 bytes).  The estimated time for this step is 0.13       
+      seconds.                                                            
+  52) We do an all-AMPs RETRIEVE step in TD_Map1 from Spool 150 (Last     
+      Use) by way of an all-rows scan into Spool 42 (all_amps), which is  
+      built locally on the AMPs.  The size of Spool 42 is estimated with  
+      no confidence to be 1,849,114 rows (83,210,130 bytes).  The         
+      estimated time for this step is 0.02 seconds.                       
+  53) We do an all-AMPs SUM step in TD_Map1 to aggregate from Spool 42    
+      (Last Use) by way of an all-rows scan, and the grouping identifier  
+      in field 1.  Aggregate intermediate results are computed globally,  
+      then placed in Spool 152 in TD_Map1.  The size of Spool 152 is      
+      estimated with no confidence to be 281,910 rows (31,855,830 bytes). 
+      The estimated time for this step is 0.15 seconds.                   
+  54) We execute the following steps in parallel.                         
+       1) We do an all-AMPs RETRIEVE step in TD_Map1 from Spool 152       
+          (Last Use) by way of an all-rows scan into Spool 19 (used to    
+          materialize view, derived table, table function or table        
+          operator TERM1) (all_amps), which is built locally on the AMPs. 
+          The size of Spool 19 is estimated with no confidence to be      
+          281,910 rows (19,733,700 bytes).  The estimated time for this   
+          step is 0.01 seconds.                                           
+       2) We do an all-AMPs JOIN step in TD_MAP1 from a single partition  
+          of D_ERM_INT.ENCTR_HIST with a condition of (                   
+          "D_ERM_INT.ENCTR_HIST.NAME_SPACE_CD = 'EPIC_TC-150'") with a    
+          residual condition of ("(D_ERM_INT.ENCTR_HIST.NAME_SPACE_CD =   
+          'EPIC_TC-150') AND (D_ERM_INT.ENCTR_HIST.ENCTR_ID >= 1)"),      
+          which is joined to a single partition of                        
+          D_ERM_INT.ENCTR_PRCS_CNTRL with a condition of (                
+          "((D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_RSULT_DT IS NULL) OR     
+          (D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_RSULT_DT <                 
+          D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_EXTC_DT )) AND              
+          ((D_ERM_INT.ENCTR_PRCS_CNTRL.NAME_SPACE_CD = 'EPIC_TC-150')     
+          AND (D_ERM_INT.ENCTR_PRCS_CNTRL.ENCTR_ID >= 1 ))") locking      
+          D_ERM_INT.ENCTR_HIST for access and D_ERM_INT.ENCTR_PRCS_CNTRL  
+          for access.  D_ERM_INT.ENCTR_HIST and                           
+          D_ERM_INT.ENCTR_PRCS_CNTRL are joined using a rowkey-based      
+          inclusion merge join, with a join condition of (                
+          "(D_ERM_INT.ENCTR_HIST.NAME_SPACE_CD = 'EPIC_TC-150') AND       
+          ((D_ERM_INT.ENCTR_HIST.ENCTR_ID >= 1) AND                       
+          ((D_ERM_INT.ENCTR_PRCS_CNTRL.ENCTR_ID =                         
+          D_ERM_INT.ENCTR_HIST.ENCTR_ID) AND                              
+          (D_ERM_INT.ENCTR_PRCS_CNTRL.NAME_SPACE_CD =                     
+          D_ERM_INT.ENCTR_HIST.NAME_SPACE_CD )))").  The input table      
+          D_ERM_INT.ENCTR_HIST will not be cached in memory.  The result  
+          goes into Spool 154 (all_amps), which is built locally on the   
+          AMPs.  Then we do a SORT to order Spool 154 by row hash.  The   
+          size of Spool 154 is estimated with no confidence to be 43,225  
+          rows (36,049,650 bytes).  The estimated time for this step is   
+          0.06 seconds.                                                   
+       3) We do an all-AMPs RETRIEVE step in TD_Map1 from Spool 12 (Last  
+          Use) by way of an all-rows scan with a condition of (           
+          "(DIAGS.NAME_SPACE_CD = 'EPIC_TC-150') AND (DIAGS.ENCTR_ID >=   
+          1)") into Spool 156 (all_amps), which is redistributed by hash  
+          code to all AMPs in TD_Map1.  Then we do a SORT to order Spool  
+          156 by row hash.  The size of Spool 156 is estimated with no    
+          confidence to be 10,856 rows (510,232 bytes).  The estimated    
+          time for this step is 0.01 seconds.                             
+  55) We do an all-AMPs JOIN step in TD_Map1 from Spool 154 (Last Use)    
+      by way of a RowHash match scan, which is joined to Spool 156 (Last  
+      Use) by way of a RowHash match scan.  Spool 154 and Spool 156 are   
+      left outer joined using a merge join, with a join condition of (    
+      "(NAME_SPACE_CD = NAME_SPACE_CD) AND (ENCTR_ID = ENCTR_ID)").  The  
+      result goes into Spool 158 (all_amps), which is built locally on    
+      the AMPs.  The size of Spool 158 is estimated with no confidence    
+      to be 43,225 rows (36,395,450 bytes).  The estimated time for this  
+      step is 0.01 seconds.                                               
+  56) We do an all-AMPs JOIN step in TD_Map1 from Spool 71 (Last Use) by  
+      way of an all-rows scan, which is joined to Spool 158 (Last Use)    
+      by way of an all-rows scan.  Spool 71 and Spool 158 are joined      
+      using a product join, with a join condition of ("(NEW_EFF_FROM_DT   
+      >= EFF_FROM_DT) AND (NEW_EFF_FROM_DT <= EFF_THRU_DT)").  The        
+      result goes into Spool 161 (all_amps), which is built locally on    
+      the AMPs.  Then we do a SORT to partition Spool 161 by rowkey.      
+      The size of Spool 161 is estimated with no confidence to be 61,130  
+      rows (51,226,940 bytes).  The estimated time for this step is 0.01  
+      seconds.                                                            
+  57) We execute the following steps in parallel.                         
+       1) We do an all-AMPs JOIN step in TD_Map1 from Spool 161 (Last     
+          Use) by way of a RowHash match scan, which is joined to a       
+          single partition of D_ERM_INT.ENCTR_AGG with a condition of (   
+          "D_ERM_INT.ENCTR_AGG.NAME_SPACE_CD = 'EPIC_TC-150'") with a     
+          residual condition of ("(D_ERM_INT.ENCTR_AGG.NAME_SPACE_CD =    
+          'EPIC_TC-150') AND (D_ERM_INT.ENCTR_AGG.ENCTR_ID >= 1)")        
+          locking D_ERM_INT.ENCTR_AGG for access.  Spool 161 and          
+          D_ERM_INT.ENCTR_AGG are left outer joined using a rowkey-based  
+          merge join, with a join condition of ("(NAME_SPACE_CD =         
+          D_ERM_INT.ENCTR_AGG.NAME_SPACE_CD) AND ((ENCTR_ID =             
+          D_ERM_INT.ENCTR_AGG.ENCTR_ID) AND ((NEW_EFF_FROM_DT <=          
+          D_ERM_INT.ENCTR_AGG.EFF_THRU_DT) AND (NEW_EFF_FROM_DT >=        
+          D_ERM_INT.ENCTR_AGG.EFF_FROM_DT )))").  The input table         
+          D_ERM_INT.ENCTR_AGG will not be cached in memory.  The result   
+          goes into Spool 162 (all_amps), which is built locally on the   
+          AMPs.  Then we do a SORT to order Spool 162 by row hash.  The   
+          size of Spool 162 is estimated with no confidence to be 61,130  
+          rows (52,205,020 bytes).  The estimated time for this step is   
+          0.04 seconds.                                                   
+       2) We do an all-AMPs RETRIEVE step in TD_Map1 from Spool 14 (Last  
+          Use) by way of an all-rows scan with a condition of (           
+          "(CHRG_DTL.NAME_SPACE_CD = 'EPIC_TC-150') AND                   
+          ((CHRG_DTL.ENCTR_ID >= 1) AND (NOT (CHRG_DTL.EFF_FROM_DT IS     
+          NULL )))") into Spool 165 (all_amps), which is redistributed    
+          by hash code to all AMPs in TD_Map1.  Then we do a SORT to      
+          order Spool 165 by row hash.  The size of Spool 165 is          
+          estimated with no confidence to be 144,586 rows (9,687,262      
+          bytes).  The estimated time for this step is 0.05 seconds.      
+  58) We do an all-AMPs JOIN step in TD_Map1 from Spool 162 (Last Use)    
+      by way of a RowHash match scan, which is joined to Spool 165 (Last  
+      Use) by way of a RowHash match scan.  Spool 162 and Spool 165 are   
+      left outer joined using a merge join, with condition(s) used for    
+      non-matching on left table ("NOT (NEW_EFF_FROM_DT IS NULL)"), with  
+      a join condition of ("(NAME_SPACE_CD = NAME_SPACE_CD) AND           
+      ((ENCTR_ID = ENCTR_ID) AND (NEW_EFF_FROM_DT = EFF_FROM_DT ))").     
+      The result goes into Spool 166 (all_amps), which is built locally   
+      on the AMPs.  Then we do a SORT to order Spool 166 by row hash.     
+      The size of Spool 166 is estimated with no confidence to be 61,130  
+      rows (53,672,140 bytes).  The estimated time for this step is 0.01  
+      seconds.                                                            
+  59) We execute the following steps in parallel.                         
+       1) We do an all-AMPs JOIN step in TD_Map1 from Spool 166 (Last     
+          Use) by way of a RowHash match scan, which is joined to Spool   
+          73 (Last Use) by way of a RowHash match scan.  Spool 166 and    
+          Spool 73 are left outer joined using a merge join, with a join  
+          condition of ("(NAME_SPACE_CD = NAME_SPACE_CD) AND (ENCTR_ID =  
+          ENCTR_ID)").  The result goes into Spool 170 (all_amps), which  
+          is built locally on the AMPs.  Then we do a SORT to order       
+          Spool 170 by row hash.  The size of Spool 170 is estimated      
+          with no confidence to be 61,130 rows (54,283,440 bytes).  The   
+          estimated time for this step is 0.01 seconds.                   
+       2) We do an all-AMPs RETRIEVE step in TD_Map1 from Spool 19 (Last  
+          Use) by way of an all-rows scan with a condition of ("NOT       
+          (TERM1.EFF_FROM_DT IS NULL)") into Spool 173 (all_amps), which  
+          is redistributed by hash code to all AMPs in TD_Map1.  Then we  
+          do a SORT to order Spool 173 by the hash code of (***           
+          NAME_SPACE_CD, *** ENCTR_ID) the sort key in spool field1       
+          eliminating duplicate rows.  The size of Spool 173 is           
+          estimated with no confidence to be 281,910 rows (31,855,830     
+          bytes).  The estimated time for this step is 0.07 seconds.      
+  60) We execute the following steps in parallel.                         
+       1) We do an all-AMPs JOIN step in TD_Map1 from Spool 170 (Last     
+          Use) by way of an all-rows scan, which is joined to Spool 173   
+          (Last Use) by way of an all-rows scan.  Spool 170 and Spool     
+          173 are joined using an exclusion merge join, with a join       
+          condition of ("(((EFF_FROM_DT = NEW_EFF_FROM_DT) AND (ENCTR_ID  
+          = ENCTR_ID )) AND (NAME_SPACE_CD = NAME_SPACE_CD )) AND (NOT    
+          (NEW_EFF_FROM_DT IS NULL ))") where unknown comparison will be  
+          ignored.  The result goes into Spool 174 (all_amps), which is   
+          built locally on the AMPs.  Then we do a SORT to order Spool    
+          174 by row hash.  The size of Spool 174 is estimated with no    
+          confidence to be 61,130 rows (54,283,440 bytes).  The           
+          estimated time for this step is 0.01 seconds.                   
+       2) We do an all-AMPs RETRIEVE step in TD_Map1 from Spool 13 (Last  
+          Use) by way of an all-rows scan with a condition of (           
+          "(CHRG_DTL2.NAME_SPACE_CD = 'EPIC_TC-150') AND                  
+          ((CHRG_DTL2.ENCTR_ID >= 1) AND (NOT (CHRG_DTL2.EFF_FROM_DT IS   
+          NULL )))") into Spool 175 (all_amps), which is redistributed    
+          by hash code to all AMPs in TD_Map1.  Then we do a SORT to      
+          order Spool 175 by row hash.  The size of Spool 175 is          
+          estimated with no confidence to be 36,221 rows (2,137,039       
+          bytes).  The estimated time for this step is 0.02 seconds.      
+  61) We do an all-AMPs JOIN step in TD_Map1 from Spool 174 (Last Use)    
+      by way of a RowHash match scan, which is joined to Spool 175 (Last  
+      Use) by way of a RowHash match scan.  Spool 174 and Spool 175 are   
+      left outer joined using a merge join, with condition(s) used for    
+      non-matching on left table ("NOT (NEW_EFF_FROM_DT IS NULL)"), with  
+      a join condition of ("(NAME_SPACE_CD = NAME_SPACE_CD) AND           
+      ((ENCTR_ID = ENCTR_ID) AND (NEW_EFF_FROM_DT = EFF_FROM_DT ))").     
+      The result goes into Spool 177 (all_amps), which is redistributed   
+      by hash code to all AMPs in TD_Map1.  The size of Spool 177 is      
+      estimated with no confidence to be 61,131 rows (55,262,424 bytes).  
+      The estimated time for this step is 2.75 seconds.                   
+  62) We do an all-AMPs JOIN step in TD_Map1 from Spool 49 by way of an   
+      all-rows scan, which is joined to Spool 177 (Last Use) by way of    
+      an all-rows scan.  Spool 49 and Spool 177 are right outer joined    
+      using a single partition hash join, with a join condition of (      
+      "DRG_CD = SRC_TERM_KEY").  The result goes into Spool 179           
+      (all_amps), which is redistributed by hash code to all AMPs in      
+      TD_Map1.  The size of Spool 179 is estimated with no confidence to  
+      be 61,131 rows (55,262,424 bytes).  The estimated time for this     
+      step is 3.03 seconds.                                               
+  63) We do an all-AMPs JOIN step in TD_Map1 from Spool 49 (Last Use) by  
+      way of an all-rows scan, which is joined to Spool 179 (Last Use)    
+      by way of an all-rows scan.  Spool 49 and Spool 179 are             
+      right outer joined using a single partition hash join, with a join  
+      condition of ("PTIENT_TYPE_CD = SRC_TERM_KEY").  The result goes    
+      into Spool 182 (all_amps), which is built locally on the AMPs.      
+      The size of Spool 182 is estimated with no confidence to be 61,131  
+      rows (55,262,424 bytes).  The estimated time for this step is 0.03  
+      seconds.                                                            
+  64) We do an all-AMPs JOIN step in TD_Map1 from Spool 182 (Last Use)    
+      by way of an all-rows scan, which is joined to Spool 66 by way of   
+      an all-rows scan.  Spool 182 and Spool 66 are left outer joined     
+      using a single partition hash join, with a join condition of (      
+      "(ORG_LVL_3_CD = SRC_TERM_KEY) AND ((NEW_EFF_FROM_DT <= EFF_END_DT) 
+      AND (NEW_EFF_FROM_DT >= EFF_STRT_DT ))").  The result goes into     
+      Spool 187 (all_amps), which is redistributed by hash code to all    
+      AMPs in TD_Map1.  The size of Spool 187 is estimated with no        
+      confidence to be 61,158 rows (53,146,302 bytes).  The estimated     
+      time for this step is 0.49 seconds.                                 
+  65) We do an all-AMPs RETRIEVE step in TD_MAP1 from D_SHR_INT.TERM by   
+      way of an all-rows scan with no residual conditions into Spool 188  
+      (all_amps), which is built locally on the AMPs.  The size of Spool  
+      188 is estimated with high confidence to be 1,382,966 rows (        
+      210,210,832 bytes).  The estimated time for this step is 0.08       
+      seconds.                                                            
+  66) We do an all-AMPs JOIN step in TD_Map1 from Spool 98 by way of an   
+      all-rows scan, which is joined to Spool 187 (Last Use) by way of    
+      an all-rows scan.  Spool 98 and Spool 187 are right outer joined    
+      using a single partition hash join, with a join condition of (      
+      "(PRMRY_INSRNC_CD = SRC_TERM_KEY) AND ((NEW_EFF_FROM_DT <=          
+      EFF_END_DT) AND (NEW_EFF_FROM_DT >= EFF_STRT_DT ))").  The result   
+      goes into Spool 189 (all_amps), which is redistributed by hash      
+      code to all AMPs in TD_Map1.  The size of Spool 189 is estimated    
+      with no confidence to be 61,187 rows (56,353,227 bytes).  The       
+      estimated time for this step is 0.37 seconds.                       
+  67) We do an all-AMPs JOIN step in TD_Map1 from Spool 188 (Last Use)    
+      by way of an all-rows scan, which is joined to Spool 189 (Last      
+      Use) by way of an all-rows scan.  Spool 188 and Spool 189 are       
+      right outer joined using a single partition hash join, with a join  
+      condition of ("TERM_KEY = PTIENT_CLAS_CD").  The result goes into   
+      Spool 193 (all_amps), which is redistributed by hash code to few    
+      or all AMPs in TD_Map1.  The size of Spool 193 is estimated with    
+      no confidence to be 61,187 rows (54,211,682 bytes).  The estimated  
+      time for this step is 6.17 seconds.                                 
+  68) We do an all-AMPs JOIN step in TD_Map1 from Spool 98 by way of an   
+      all-rows scan, which is joined to Spool 193 (Last Use) by way of    
+      an all-rows scan.  Spool 98 and Spool 193 are right outer joined    
+      using a single partition hash join, with a join condition of (      
+      "(SCNDRY_INSRNC_CD = SRC_TERM_KEY) AND ((NEW_EFF_FROM_DT <=         
+      EFF_END_DT) AND (NEW_EFF_FROM_DT >= EFF_STRT_DT ))").  The result   
+      goes into Spool 196 (all_amps), which is built locally on the AMPs. 
+      The size of Spool 196 is estimated with no confidence to be 61,216  
+      rows (52,094,816 bytes).  The estimated time for this step is 0.16  
+      seconds.                                                            
+  69) We do an all-AMPs JOIN step in TD_Map1 from Spool 196 (Last Use)    
+      by way of an all-rows scan, which is joined to Spool 66 (Last Use)  
+      by way of an all-rows scan.  Spool 196 and Spool 66 are left outer  
+      joined using a single partition hash join, with condition(s) used   
+      for non-matching on left table ("NOT (TGT_TERM_KEY IS NULL)"),      
+      with a join condition of ("(TGT_TERM_KEY = SRC_TERM_KEY) AND        
+      ((NEW_EFF_FROM_DT <= EFF_END_DT) AND (NEW_EFF_FROM_DT >=            
+      EFF_STRT_DT ))").  The result goes into Spool 201 (all_amps),       
+      which is redistributed by hash code to all AMPs in TD_Map1.  The    
+      size of Spool 201 is estimated with no confidence to be 61,243      
+      rows (55,302,429 bytes).  The estimated time for this step is 0.43  
+      seconds.                                                            
+  70) We do an all-AMPs JOIN step in TD_Map1 from Spool 98 by way of an   
+      all-rows scan, which is joined to Spool 201 (Last Use) by way of    
+      an all-rows scan.  Spool 98 and Spool 201 are right outer joined    
+      using a single partition hash join, with condition(s) used for      
+      non-matching on right table ("NOT (TGT_TERM_KEY IS NULL)"), with a  
+      join condition of ("(TGT_TERM_KEY = SRC_TERM_KEY) AND               
+      ((NEW_EFF_FROM_DT <= EFF_END_DT) AND (NEW_EFF_FROM_DT >=            
+      EFF_STRT_DT ))").  The result goes into Spool 203 (all_amps),       
+      which is redistributed by hash code to all AMPs in TD_Map1.  The    
+      size of Spool 203 is estimated with no confidence to be 61,272      
+      rows (53,184,096 bytes).  The estimated time for this step is 1.50  
+      seconds.                                                            
+  71) We do an all-AMPs JOIN step in TD_Map1 from Spool 98 by way of an   
+      all-rows scan, which is joined to Spool 203 (Last Use) by way of    
+      an all-rows scan.  Spool 98 and Spool 203 are right outer joined    
+      using a single partition hash join, with a join condition of (      
+      "(THIRD_INSRNC_CD = SRC_TERM_KEY) AND ((NEW_EFF_FROM_DT <=          
+      EFF_END_DT) AND (NEW_EFF_FROM_DT >= EFF_STRT_DT ))").  The result   
+      goes into Spool 207 (all_amps), which is redistributed by hash      
+      code to all AMPs in TD_Map1.  The size of Spool 207 is estimated    
+      with no confidence to be 61,301 rows (51,063,733 bytes).  The       
+      estimated time for this step is 1.48 seconds.                       
+  72) We do an all-AMPs JOIN step in TD_Map1 from Spool 98 (Last Use) by  
+      way of an all-rows scan, which is joined to Spool 207 (Last Use)    
+      by way of an all-rows scan.  Spool 98 and Spool 207 are             
+      right outer joined using a single partition hash join, with a join  
+      condition of ("(FRTH_INSRNC_CD = SRC_TERM_KEY) AND                  
+      ((NEW_EFF_FROM_DT <= EFF_END_DT) AND (NEW_EFF_FROM_DT >=            
+      EFF_STRT_DT ))").  The result goes into Spool 38 (all_amps), which  
+      is built locally on the AMPs.  The size of Spool 38 is estimated    
+      with no confidence to be 61,330 rows (49,064,000 bytes).  The       
+      estimated time for this step is 0.04 seconds.                       
+  73) We do an all-AMPs SUM step in TD_Map1 to aggregate from Spool 38    
+      (Last Use) by way of an all-rows scan, and the grouping identifier  
+      in field 1.  Aggregate intermediate results are computed globally,  
+      then placed in Spool 213 in TD_Map1.  The size of Spool 213 is      
+      estimated with no confidence to be 61,130 rows (12,715,040 bytes).  
+      The estimated time for this step is 0.03 seconds.                   
+  74) We execute the following steps in parallel.                         
+       1) We do an all-AMPs RETRIEVE step in TD_Map1 from Spool 213       
+          (Last Use) by way of an all-rows scan into Spool 20 (used to    
+          materialize view, derived table, table function or table        
+          operator TERM_ALL) (all_amps), which is built locally on the    
+          AMPs.  The size of Spool 20 is estimated with no confidence to  
+          be 61,130 rows (5,257,180 bytes).  The estimated time for this  
+          step is 0.01 seconds.                                           
+       2) We do an all-AMPs JOIN step in TD_Map1 from Spool 60 (Last      
+          Use) by way of an all-rows scan, which is joined to a single    
+          partition of D_ERM_INT.ENCTR_HIST with a condition of (         
+          "D_ERM_INT.ENCTR_HIST.NAME_SPACE_CD = 'EPIC_TC-150'") with a    
+          residual condition of ("(D_ERM_INT.ENCTR_HIST.NAME_SPACE_CD =   
+          'EPIC_TC-150') AND (D_ERM_INT.ENCTR_HIST.ENCTR_ID >= 1)")       
+          locking D_ERM_INT.ENCTR_HIST for access.  Spool 60 and          
+          D_ERM_INT.ENCTR_HIST are joined using a product join, with a    
+          join condition of ("(NEW_EFF_FROM_DT >=                         
+          D_ERM_INT.ENCTR_HIST.EFF_FROM_DT) AND (NEW_EFF_FROM_DT <=       
+          D_ERM_INT.ENCTR_HIST.EFF_THRU_DT)").  The input table           
+          D_ERM_INT.ENCTR_HIST will not be cached in memory, but it is    
+          eligible for synchronized scanning.  The result goes into       
+          Spool 216 (all_amps), which is built locally on the AMPs.       
+          Then we do a SORT to partition Spool 216 by rowkey.  The size   
+          of Spool 216 is estimated with no confidence to be 527,405      
+          rows (23,733,225 bytes).  The estimated time for this step is   
+          0.06 seconds.                                                   
+  75) We execute the following steps in parallel.                         
+       1) We do an all-AMPs JOIN step in TD_Map1 from Spool 216 (Last     
+          Use) by way of an all-rows scan, which is joined to a single    
+          partition of D_ERM_INT.ENCTR_PRCS_CNTRL with a condition of (   
+          "D_ERM_INT.ENCTR_PRCS_CNTRL.NAME_SPACE_CD = 'EPIC_TC-150'")     
+          with a residual condition of (                                  
+          "((D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_RSULT_DT IS NULL) OR     
+          (D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_RSULT_DT <                 
+          D_ERM_INT.ENCTR_PRCS_CNTRL.STD_GRPG_EXTC_DT )) AND              
+          ((D_ERM_INT.ENCTR_PRCS_CNTRL.NAME_SPACE_CD = 'EPIC_TC-150')     
+          AND (D_ERM_INT.ENCTR_PRCS_CNTRL.ENCTR_ID >= 1 ))") locking      
+          D_ERM_INT.ENCTR_PRCS_CNTRL for access.  Spool 216 and           
+          D_ERM_INT.ENCTR_PRCS_CNTRL are joined using a rowkey-based      
+          inclusion merge join, with a join condition of (                
+          "(D_ERM_INT.ENCTR_PRCS_CNTRL.NAME_SPACE_CD = NAME_SPACE_CD)     
+          AND ((D_ERM_INT.ENCTR_PRCS_CNTRL.ENCTR_ID = ENCTR_ID) AND       
+          ((ENCTR_ID >= 1) AND (NAME_SPACE_CD = 'EPIC_TC-150')))").  The  
+          result goes into Spool 217 (all_amps), which is redistributed   
+          by hash code to all AMPs in TD_Map1.  Then we do a SORT to      
+          order Spool 217 by row hash.  The size of Spool 217 is          
+          estimated with no confidence to be 243,626 rows (10,963,170     
+          bytes).  The estimated time for this step is 0.06 seconds.      
+       2) We do an all-AMPs RETRIEVE step in TD_Map1 from Spool 20 (Last  
+          Use) by way of an all-rows scan with a condition of (           
+          "(TERM_ALL.ENCTR_ID >= 1) AND ((TERM_ALL.NAME_SPACE_CD =        
+          'EPIC_TC-150') AND (NOT (TERM_ALL.EFF_FROM_DT IS NULL )))")     
+          into Spool 219 (all_amps), which is redistributed by hash code  
+          to all AMPs in TD_Map1.  Then we do a SORT to order Spool 219   
+          by row hash.  The size of Spool 219 is estimated with no        
+          confidence to be 61,130 rows (4,768,140 bytes).  The estimated  
+          time for this step is 0.02 seconds.                             
+       3) We do an all-AMPs RETRIEVE step in TD_Map1 from Spool 21 (Last  
+          Use) by way of an all-rows scan with a condition of (           
+          "(TERM2.ENCTR_ID >= 1) AND ((TERM2.NAME_SPACE_CD =              
+          'EPIC_TC-150') AND (NOT (TERM2.EFF_FROM_DT IS NULL )))") into   
+          Spool 220 (all_amps), which is redistributed by hash code to    
+          all AMPs in TD_Map1.  Then we do a SORT to order Spool 220 by   
+          row hash.  The size of Spool 220 is estimated with no           
+          confidence to be 137 rows (8,220 bytes).  The estimated time    
+          for this step is 0.01 seconds.                                  
+  76) We do an all-AMPs JOIN step in TD_Map1 from Spool 217 (Last Use)    
+      by way of a RowHash match scan, which is joined to Spool 219 (Last  
+      Use) by way of a RowHash match scan.  Spool 217 and Spool 219 are   
+      left outer joined using a merge join, with condition(s) used for    
+      non-matching on left table ("NOT (NEW_EFF_FROM_DT IS NULL)"), with  
+      a join condition of ("(ENCTR_ID = ENCTR_ID) AND ((NAME_SPACE_CD =   
+      NAME_SPACE_CD) AND (EFF_FROM_DT = NEW_EFF_FROM_DT ))").  The        
+      result goes into Spool 221 (all_amps), which is built locally on    
+      the AMPs.  Then we do a SORT to order Spool 221 by row hash.  The   
+      size of Spool 221 is estimated with no confidence to be 251,681     
+      rows (20,134,480 bytes).  The estimated time for this step is 0.01  
+      seconds.                                                            
+  77) We execute the following steps in parallel.                         
+       1) We do an all-AMPs JOIN step in TD_Map1 from Spool 220 (Last     
+          Use) by way of a RowHash match scan, which is joined to Spool   
+          221 (Last Use) by way of a RowHash match scan.  Spool 220 and   
+          Spool 221 are right outer joined using a merge join, with       
+          condition(s) used for non-matching on right table ("NOT         
+          (NEW_EFF_FROM_DT IS NULL)"), with a join condition of (         
+          "(ENCTR_ID = ENCTR_ID) AND ((NAME_SPACE_CD = NAME_SPACE_CD)     
+          AND (EFF_FROM_DT = NEW_EFF_FROM_DT ))").  The result goes into  
+          Spool 224 (all_amps), which is built locally on the AMPs.       
+          Then we do a SORT to order Spool 224 by row hash.  The size of  
+          Spool 224 is estimated with no confidence to be 251,682 rows (  
+          24,413,154 bytes).  The estimated time for this step is 0.01    
+          seconds.                                                        
+       2) We do an all-AMPs RETRIEVE step in TD_Map1 from Spool 22 (Last  
+          Use) by way of an all-rows scan with a condition of (           
+          "(TERM1.ENCTR_ID >= 1) AND ((TERM1.NAME_SPACE_CD =              
+          'EPIC_TC-150') AND (NOT (TERM1.EFF_FROM_DT IS NULL )))") into   
+          Spool 227 (all_amps), which is redistributed by hash code to    
+          all AMPs in TD_Map1.  Then we do a SORT to order Spool 227 by   
+          row hash.  The size of Spool 227 is estimated with no           
+          confidence to be 85,199 rows (5,282,338 bytes).  The estimated  
+          time for this step is 0.03 seconds.                             
+  78) We do an all-AMPs JOIN step in TD_Map1 from Spool 224 (Last Use)    
+      by way of a RowHash match scan, which is joined to Spool 227 (Last  
+      Use) by way of a RowHash match scan.  Spool 224 and Spool 227 are   
+      left outer joined using a merge join, with condition(s) used for    
+      non-matching on left table ("NOT (NEW_EFF_FROM_DT IS NULL)"), with  
+      a join condition of ("(ENCTR_ID = ENCTR_ID) AND ((NAME_SPACE_CD =   
+      NAME_SPACE_CD) AND (EFF_FROM_DT = NEW_EFF_FROM_DT ))").  The        
+      result goes into Spool 24 (used to materialize view, derived table, 
+      table function or table operator MAIN) (all_amps), which is built   
+      locally on the AMPs.  The size of Spool 24 is estimated with no     
+      confidence to be 275,543 rows (23,145,612 bytes).  The estimated    
+      time for this step is 0.01 seconds.                                 
+  79) We do an all-AMPs SUM step in TD_Map1 to aggregate from Spool 24    
+      (Last Use) by way of an all-rows scan with a condition of (         
+      "MAIN.ENCTR_ID >= 1"), and the grouping identifier in field 1.      
+      Aggregate intermediate results are computed globally, then placed   
+      in Spool 25 in TD_Map1.  The size of Spool 25 is estimated with no  
+      confidence to be 206,658 rows (49,184,604 bytes).  The estimated    
+      time for this step is 0.09 seconds.                                 
+  80) Finally, we send out an END TRANSACTION step to all AMPs involved   
+      in processing the request.                                          
+   -> The contents of Spool 25 are sent back to the user as the result    
+      of statement 1.                                                     
